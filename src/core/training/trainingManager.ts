@@ -1,12 +1,16 @@
 import { DEFAULT_DQN_CONFIG, DQNAgent, DQNConfig } from '../rl/dqn';
-import type { Environment, EnvSnapshot, TaskDefinition } from '../task/types';
+import type { Environment, EnvSnapshot, TaskDefinition, TaskNotice } from '../task/types';
+import { MODEL_VERSION } from './model';
 import { FIXED_DT } from '../physics/physicsWorld';
-import type { Counters, EpisodeRecord, ModelBlob, TrainingStats } from './model';
+import type { Counters, EpisodeRecord, ModelBlob, ReplayRecord, StageStats, StageTotals, TrainingStats } from './model';
 
 export type RunState = 'idle' | 'running' | 'paused';
 
 const WINDOW = 50;
 const HISTORY_CAP = 4000;
+const LOSS_EVERY = 25;
+const LOSS_CAP = 4000;
+const PERIODIC = 20;
 /** Score awarded for a successful episode (plus a speed bonus). */
 const SUCCESS_SCORE = 100;
 
@@ -33,10 +37,15 @@ export class TrainingManager {
   private acc = 0;
   private epReward = 0;
   private counters: Counters = { episodes: 0, envSteps: 0, successes: 0, totalScore: 0 };
-  private rewards: number[] = [];
-  private successes: number[] = [];
-  private steps: number[] = [];
+  private hist: EpisodeRecord[] = [];
   private pending: EpisodeRecord[] = [];
+  private pendingTraces: ReplayRecord[] = [];
+  private pendingNotices: TaskNotice[] = [];
+  private lossHist: number[] = [];
+  private pendingLoss: number[] = [];
+  private updAcc = 0;
+  private stageTotals: StageTotals[] = [];
+  private stageBestSeen: number[] = [];
   private demoEpisodes = 0;
   private demoSuccesses = 0;
   private updatesBudget = 0;
@@ -60,7 +69,7 @@ export class TrainingManager {
 
   static async create(task: TaskDefinition, seed = 1, config: Partial<DQNConfig> = {}): Promise<TrainingManager> {
     const env = await task.createEnvironment(seed);
-    const agent = new DQNAgent(env.observationSize, env.actionSet.size, config, seed);
+    const agent = new DQNAgent(env.observationSize, env.actionSet.size, { ...task.dqn, ...config }, seed);
     return new TrainingManager(task, env, agent, seed);
   }
 
@@ -81,6 +90,17 @@ export class TrainingManager {
   setSpeed(x: number): void {
     this.speed = x;
   }
+  /** Stop: halt and start a fresh (unrecorded) episode. Learning state is kept. */
+  stop(): void {
+    this.state = 'idle';
+    this.beginEpisode();
+    this.dirty = true;
+  }
+  /** Task-specific command (curriculum settings, start checkpoint…). */
+  command(cmd: string, arg: unknown): void {
+    this.env.command?.(cmd, arg);
+    this.dirty = true;
+  }
 
   /** Abort the current episode (not recorded) and start a fresh one. Learning state is untouched. */
   resetEnvironment(): void {
@@ -92,10 +112,15 @@ export class TrainingManager {
   resetAI(): void {
     this.agent.reset(this.seed + Math.floor(Math.random() * 100000));
     this.counters = { episodes: 0, envSteps: 0, successes: 0, totalScore: 0 };
-    this.rewards = [];
-    this.successes = [];
-    this.steps = [];
+    this.hist = [];
     this.pending = [];
+    this.pendingTraces = [];
+    this.lossHist = [];
+    this.pendingLoss = [];
+    this.stageTotals = [];
+    this.stageBestSeen = [];
+    this.updAcc = 0;
+    this.env.command?.('resetProgress', null);
     this.demoEpisodes = 0;
     this.demoSuccesses = 0;
     this.cachedStats = { avgReward: 0, successRate: 0, avgCompletionTime: 0 };
@@ -185,9 +210,18 @@ export class TrainingManager {
     if (!this.demo) {
       this.agent.remember(this.obs, this.action, r.reward, this.nextObs, r.terminal);
       this.counters.envSteps++;
-      for (let u = 0; u < this.agent.config.updatesPerStep; u++) {
-        if (this.updatesBudget <= 0) break;
-        if (this.agent.train() !== null) this.updatesBudget--;
+      this.updAcc += this.agent.config.updatesPerStep;
+      while (this.updAcc >= 1) {
+        this.updAcc -= 1;
+        if (this.updatesBudget <= 0) {
+          this.updAcc = Math.min(this.updAcc, 2);
+          break;
+        }
+        const l = this.agent.train();
+        if (l !== null) {
+          this.updatesBudget--;
+          if (this.agent.trainSteps % LOSS_EVERY === 0) this.pushLoss(this.agent.lastLoss);
+        }
       }
     }
 
@@ -203,6 +237,12 @@ export class TrainingManager {
     return true;
   }
 
+  private pushLoss(v: number): void {
+    this.lossHist.push(v);
+    if (this.lossHist.length > LOSS_CAP) this.lossHist.shift();
+    this.pendingLoss.push(v);
+  }
+
   private finishEpisode(success: boolean): void {
     if (this.demo) {
       this.demoEpisodes++;
@@ -211,42 +251,130 @@ export class TrainingManager {
     }
     const c = this.counters;
     c.episodes++;
-    if (success) {
+    const sum = this.env.episodeSummary?.();
+    const partial = !!sum?.partial;
+    if (success && !partial) {
       c.successes++;
       c.totalScore += SUCCESS_SCORE + Math.round(50 * (1 - this.decision / this.env.maxDecisions));
     }
-    this.rewards.push(this.epReward);
-    this.successes.push(success ? 1 : 0);
-    this.steps.push(this.decision);
-    if (this.rewards.length > HISTORY_CAP) {
-      this.rewards.shift();
-      this.successes.shift();
-      this.steps.shift();
+    const rec: EpisodeRecord = { ep: c.episodes, reward: this.epReward, success: success && !partial, steps: this.decision };
+    if (sum) {
+      rec.stage = sum.stage;
+      rec.progress = sum.progress;
+      rec.checkpoints = sum.checkpoints;
+      rec.falls = sum.falls;
+      rec.partial = partial;
+      this.noteStage(rec, success && !partial);
     }
-    this.pending.push({ ep: c.episodes, reward: this.epReward, success, steps: this.decision });
+    this.hist.push(rec);
+    if (this.hist.length > HISTORY_CAP) this.hist.shift();
+    this.pending.push(rec);
+    this.collectTrace(rec, sum !== undefined);
+    for (const n of this.env.drainNotices?.() ?? []) {
+      this.pendingNotices.push(n);
+      if (n.kind === 'unlock') this.agent.boostExploration(0.3);
+    }
     this.recomputeWindowStats();
   }
 
+  private noteStage(rec: EpisodeRecord, success: boolean): void {
+    const st = rec.stage!;
+    while (this.stageTotals.length <= st) this.stageTotals.push({ episodes: 0, successes: 0, falls: 0, bestTime: 0, bestProgress: 0 });
+    const t = this.stageTotals[st];
+    t.falls += rec.falls ?? 0;
+    if (rec.partial) return;
+    t.episodes++;
+    if (success) {
+      t.successes++;
+      const time = rec.steps * this.env.substepsPerDecision * FIXED_DT;
+      if (t.bestTime === 0 || time < t.bestTime) t.bestTime = time;
+    }
+    t.bestProgress = Math.max(t.bestProgress, rec.progress ?? 0);
+  }
+
+  /** Keep a recording for the replay viewer; the UI decides how many to retain. */
+  private collectTrace(rec: EpisodeRecord, multi: boolean): void {
+    if (!multi) return;
+    const trace = this.env.takeTrace?.();
+    if (!trace) return;
+    const st = rec.stage!;
+    const best = this.stageBestSeen[st] ?? -1;
+    const score = (rec.progress ?? 0) + (rec.success ? 1 : 0);
+    let kind: ReplayRecord['kind'] = 'recent';
+    if (this.stageBestSeen[st] === undefined) kind = 'first';
+    else if (score > best + 1e-6) kind = 'milestone';
+    else if (rec.ep % PERIODIC === 0) kind = 'periodic';
+    this.stageBestSeen[st] = Math.max(best, score);
+    this.pendingTraces.push({
+      ep: rec.ep,
+      stage: st,
+      reward: rec.reward,
+      success: rec.success,
+      progress: rec.progress ?? 0,
+      checkpoints: rec.checkpoints ?? 0,
+      falls: rec.falls ?? 0,
+      kind,
+      trace,
+    });
+  }
+
   private recomputeWindowStats(): void {
-    const n = Math.min(WINDOW, this.rewards.length);
-    if (n === 0) {
+    const recs = this.hist.filter((r) => !r.partial);
+    const w = recs.slice(-WINDOW);
+    if (w.length === 0) {
       this.cachedStats = { avgReward: 0, successRate: 0, avgCompletionTime: 0 };
       return;
     }
+    const dt = this.env.substepsPerDecision * FIXED_DT;
     let rs = 0;
     let ss = 0;
     let ts = 0;
     let tn = 0;
-    const dt = (this.env.substepsPerDecision * FIXED_DT) as number;
-    for (let i = this.rewards.length - n; i < this.rewards.length; i++) {
-      rs += this.rewards[i];
-      ss += this.successes[i];
-      if (this.successes[i]) {
-        ts += this.steps[i] * dt;
+    for (const r of w) {
+      rs += r.reward;
+      if (r.success) {
+        ss++;
+        ts += r.steps * dt;
         tn++;
       }
     }
-    this.cachedStats = { avgReward: rs / n, successRate: ss / n, avgCompletionTime: tn ? ts / tn : 0 };
+    this.cachedStats = { avgReward: rs / w.length, successRate: ss / w.length, avgCompletionTime: tn ? ts / tn : 0 };
+  }
+
+  private stageStats(): StageStats[] {
+    const n = Math.max(this.stageTotals.length, (this.task.info.geometry.stages as number | undefined) ?? 0);
+    const dt = this.env.substepsPerDecision * FIXED_DT;
+    const out: StageStats[] = [];
+    for (let i = 0; i < n; i++) {
+      const t = this.stageTotals[i] ?? { episodes: 0, successes: 0, falls: 0, bestTime: 0, bestProgress: 0 };
+      const w = this.hist.filter((r) => r.stage === i && !r.partial).slice(-WINDOW);
+      let rs = 0, ss = 0, ts = 0, tn = 0, ps = 0, cs = 0;
+      for (const r of w) {
+        rs += r.reward;
+        ps += r.progress ?? 0;
+        cs += r.checkpoints ?? 0;
+        if (r.success) {
+          ss++;
+          ts += r.steps * dt;
+          tn++;
+        }
+      }
+      const m = w.length || 1;
+      out.push({
+        episodes: t.episodes,
+        attempts: w.length,
+        successes: t.successes,
+        falls: t.falls,
+        successRate: w.length ? ss / w.length : 0,
+        avgReward: rs / m,
+        avgTime: tn ? ts / tn : 0,
+        bestTime: t.bestTime,
+        avgProgress: ps / m,
+        avgCheckpoints: cs / m,
+        bestProgress: t.bestProgress,
+      });
+    }
+    return out;
   }
 
   // ---------------- state out ----------------
@@ -270,6 +398,7 @@ export class TrainingManager {
       demo: this.demo,
       demoEpisodes: this.demoEpisodes,
       demoSuccessRate: this.demoEpisodes ? this.demoSuccesses / this.demoEpisodes : 0,
+      extra: this.env.liveStats ? { ...this.env.liveStats(), stages: this.stageStats() } : undefined,
     };
   }
 
@@ -282,22 +411,39 @@ export class TrainingManager {
     this.pending = [];
     return p;
   }
+  drainTraces(): ReplayRecord[] {
+    const p = this.pendingTraces;
+    this.pendingTraces = [];
+    return p;
+  }
+  drainNotices(): TaskNotice[] {
+    const p = this.pendingNotices;
+    this.pendingNotices = [];
+    return p;
+  }
+  drainLoss(): number[] {
+    const p = this.pendingLoss;
+    this.pendingLoss = [];
+    return p;
+  }
 
-  /** Full history (for the graph when a model is loaded). */
+  /** Full history (for the graphs when a model is loaded). */
   fullHistory(): EpisodeRecord[] {
-    const out: EpisodeRecord[] = [];
-    const first = this.counters.episodes - this.rewards.length;
-    for (let i = 0; i < this.rewards.length; i++)
-      out.push({ ep: first + i + 1, reward: this.rewards[i], success: !!this.successes[i], steps: this.steps[i] });
-    return out;
+    return this.hist.slice();
+  }
+  fullLoss(): number[] {
+    return this.lossHist.slice();
   }
 
   // ---------------- persistence ----------------
 
-  exportModel(): ModelBlob {
+  /** `withReplay`: include the (int8-quantised) replay buffer – used for IndexedDB saves, not exported files. */
+  exportModel(withReplay = false): ModelBlob {
     const a = this.agent.exportState();
+    const h = this.hist;
+    const multi = h.some((r) => r.stage !== undefined);
     return {
-      version: 1,
+      version: MODEL_VERSION,
       taskId: this.task.info.id,
       obsSize: this.env.observationSize,
       actionCount: this.env.actionSet.size,
@@ -311,29 +457,66 @@ export class TrainingManager {
       epsSteps: a.epsSteps,
       counters: { ...this.counters },
       history: {
-        reward: Float32Array.from(this.rewards),
-        success: Uint8Array.from(this.successes),
-        steps: Uint16Array.from(this.steps),
+        reward: Float32Array.from(h, (r) => r.reward),
+        success: Uint8Array.from(h, (r) => (r.success ? 1 : 0)),
+        steps: Uint16Array.from(h, (r) => r.steps),
+        stage: multi ? Uint8Array.from(h, (r) => r.stage ?? 0) : undefined,
+        progress: multi ? Float32Array.from(h, (r) => r.progress ?? 0) : undefined,
+        checkpoints: multi ? Uint8Array.from(h, (r) => r.checkpoints ?? 0) : undefined,
+        falls: multi ? Uint8Array.from(h, (r) => Math.min(255, r.falls ?? 0)) : undefined,
+        partial: multi ? Uint8Array.from(h, (r) => (r.partial ? 1 : 0)) : undefined,
       },
+      lossHistory: Float32Array.from(this.lossHist),
+      stageTotals: this.stageTotals.map((t) => ({ ...t })),
+      taskState: this.env.exportState?.(),
+      replay: withReplay ? this.agent.replay.dump() : undefined,
       savedAt: Date.now(),
     };
   }
 
-  /** Throws if the blob does not match this task's network shape. */
+  /** Throws a readable error if the blob does not match this task's network shape. */
   importModel(m: ModelBlob): void {
-    if (m.taskId !== this.task.info.id) throw new Error(`Model is for task "${m.taskId}"`);
+    if (m.taskId !== this.task.info.id) throw new Error(`Model is for task "${m.taskId}", not "${this.task.info.id}"`);
     if (m.obsSize !== this.env.observationSize || m.actionCount !== this.env.actionSet.size)
-      throw new Error('Model input/output size does not match this task');
+      throw new Error(
+        `Model shape ${m.obsSize}→${m.actionCount} does not match this task (${this.env.observationSize}→${this.env.actionSet.size})`,
+      );
     const cfg = { ...DEFAULT_DQN_CONFIG, ...m.config };
     if (JSON.stringify(cfg.hidden) !== JSON.stringify(this.agent.config.hidden))
       throw new Error('Model network architecture does not match');
+    const n = this.agent.online.params.length;
+    if (m.online.length !== n || m.target.length !== n || m.adamM.length !== n || m.adamV.length !== n)
+      throw new Error('Model weight count does not match this network');
     this.agent.config = cfg;
     this.agent.importState(m);
+    if (m.replay) this.agent.loadReplay(m.replay);
     this.counters = { ...m.counters };
-    this.rewards = Array.from(m.history.reward);
-    this.successes = Array.from(m.history.success);
-    this.steps = Array.from(m.history.steps);
+    const h = m.history;
+    this.hist = [];
+    for (let i = 0; i < h.reward.length; i++) {
+      const r: EpisodeRecord = {
+        ep: m.counters.episodes - h.reward.length + i + 1,
+        reward: h.reward[i],
+        success: !!h.success[i],
+        steps: h.steps[i],
+      };
+      if (h.stage) {
+        r.stage = h.stage[i];
+        r.progress = h.progress?.[i] ?? 0;
+        r.checkpoints = h.checkpoints?.[i] ?? 0;
+        r.falls = h.falls?.[i] ?? 0;
+        r.partial = !!h.partial?.[i];
+      }
+      this.hist.push(r);
+    }
+    this.lossHist = m.lossHistory ? Array.from(m.lossHistory) : [];
+    this.pendingLoss = [];
+    this.stageTotals = (m.stageTotals ?? []).map((t) => ({ ...t }));
+    this.stageBestSeen = [];
     this.pending = [];
+    this.pendingTraces = [];
+    if (m.taskState !== undefined) this.env.importState?.(m.taskState);
+    this.updAcc = 0;
     this.recomputeWindowStats();
     this.demoEpisodes = 0;
     this.demoSuccesses = 0;

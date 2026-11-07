@@ -3,6 +3,8 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { EnvSnapshot } from '../core/task/types';
 import { BALL_PALETTES, createCheckerTexture, createGridTexture } from './ballStyle';
 import { CameraController } from './cameraController';
+import { ObbyScene } from './obbyScene';
+import { STAGES } from '../core/tasks/obby/levels/compile';
 
 export type QualityMode = 'auto' | 'high' | 'medium' | 'low';
 type Tier = 'high' | 'medium' | 'low';
@@ -46,6 +48,14 @@ export class Viewport {
   private lastT = 0;
   private resizeObs: ResizeObserver;
   private paletteIndex = 0;
+  // ---- Obby ----
+  private obby: ObbyScene | null = null;
+  private obbyBall = false;
+  /** Replay viewer drives the scene itself; live snapshots are ignored while set. */
+  replayMode = false;
+  private ghost: THREE.Mesh | null = null;
+  private overlays = new THREE.Group();
+  private overview = false;
 
   constructor(private readonly container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -96,7 +106,21 @@ export class Viewport {
 
   /** Build floor, target tile and ball for a task's geometry. */
   buildTask(g: Record<string, number>): void {
-    this.world.clear();
+    this.resetWorld();
+    this.obbyBall = false;
+    this.controls.followScale = 0.65;
+    this.controls.dist = 18;
+    this.controls.setOverview(false, this.stageCenter, 30);
+    const sc = this.light.shadow.camera;
+    sc.left = sc.bottom = -9.5;
+    sc.right = sc.top = 9.5;
+    sc.far = 32;
+    sc.updateProjectionMatrix();
+    this.light.position.set(7, 12, 5);
+    this.light.target.position.set(0, 0, 0);
+    this.scene.fog = new THREE.Fog(this.scene.background as THREE.Color, 28, 62);
+    this.camera.far = 120;
+    this.camera.updateProjectionMatrix();
     const half = g.arenaHalf;
     const thick = g.floorThickness;
 
@@ -152,6 +176,127 @@ export class Viewport {
     this.epoch = -1;
   }
 
+  private makeBall(radius: number): void {
+    this.ballMat = new THREE.MeshPhysicalMaterial({
+      map: createCheckerTexture(BALL_PALETTES[this.paletteIndex], this.aniso),
+      roughness: 0.34,
+      metalness: 0.05,
+      clearcoat: 0.5,
+      clearcoatRoughness: 0.2,
+    });
+    this.ball = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 36), this.ballMat);
+    this.ball.castShadow = true;
+    this.world.add(this.ball);
+  }
+
+  private resetWorld(): void {
+    this.world.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+    });
+    this.obby?.dispose();
+    this.obby = null;
+    this.world.clear();
+    this.ghost = null;
+    this.overlays = new THREE.Group();
+    this.replayMode = false;
+    this.overview = false;
+  }
+
+  /** Obby: floating platforms in the void. The ball is the same checkerboard ball. */
+  buildObby(): void {
+    this.resetWorld();
+    this.obbyBall = true;
+    this.obby = new ObbyScene();
+    this.world.add(this.obby.group, this.overlays);
+    this.makeBall(0.5);
+    this.ball.position.set(0, 1, 0);
+    this.snapPos.copy(this.ball.position);
+    const sc = this.light.shadow.camera;
+    sc.left = sc.bottom = -16;
+    sc.right = sc.top = 16;
+    sc.far = 70;
+    sc.updateProjectionMatrix();
+    this.scene.fog = new THREE.Fog(this.scene.background as THREE.Color, 40, 90);
+    this.camera.far = 160;
+    this.camera.updateProjectionMatrix();
+    this.controls.dist = 13;
+    this.controls.followScale = 1;
+    this.setObbyStage(0);
+    this.epoch = -1;
+  }
+
+  setObbyStage(i: number): void {
+    if (!this.obby || this.obby.stageIdx === i) return;
+    this.obby.setStage(i);
+    const b = STAGES[i].bounds;
+    this.stageCenter.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2);
+    this.stageSize = Math.max(b.max[0] - b.min[0], b.max[2] - b.min[2]);
+    this.clearOverlays();
+    this.epoch = -1;
+  }
+  private stageCenter = new THREE.Vector3();
+  private stageSize = 30;
+
+  setOverview(on: boolean): void {
+    this.overview = on;
+    this.controls.setOverview(on, this.stageCenter, this.stageSize);
+    // The top-down camera sits far above the course: don't let fog swallow it.
+    const f = this.scene.fog as THREE.Fog;
+    f.near = on ? 200 : 40;
+    f.far = on ? 400 : 90;
+    this.camera.far = on ? 500 : 160;
+    this.camera.updateProjectionMatrix();
+  }
+
+  // ---- replay helpers ----
+  clearOverlays(): void {
+    for (const c of [...this.overlays.children]) {
+      this.overlays.remove(c);
+      const m = c as THREE.Mesh | THREE.Line;
+      m.geometry?.dispose();
+      (m.material as THREE.Material)?.dispose?.();
+    }
+  }
+
+  /** Trajectory line (cm int16 x,y,z) coloured per episode. */
+  addTrail(pos: Int16Array, color: string, opacity = 0.9): void {
+    const n = pos.length / 3;
+    const a = new Float32Array(pos.length);
+    for (let i = 0; i < pos.length; i++) a[i] = pos[i] / 100;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(a, 3));
+    const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
+    l.frustumCulled = false;
+    if (n > 1) this.overlays.add(l);
+  }
+
+  addMarker(p: [number, number, number], color: string, r = 0.22): void {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), new THREE.MeshBasicMaterial({ color }));
+    m.position.set(p[0], p[1] + 0.9, p[2]);
+    this.overlays.add(m);
+  }
+
+  /** Show the world at replay time `t` with the ball (and optional ghost ball) at the given positions. */
+  setReplayFrame(t: number, ball: [number, number, number], ghost?: [number, number, number] | null, q?: THREE.Quaternion): void {
+    if (![t, ...ball].every(Number.isFinite)) {
+      console.warn('replay frame skipped (non-finite)', t, ball);
+      return;
+    }
+    this.obby?.applyTime(t);
+    this.snapPos.set(...ball);
+    if (q) this.snapQuat.copy(q);
+    if (!this.ghost) {
+      this.ghost = new THREE.Mesh(
+        new THREE.SphereGeometry(0.5, 24, 16),
+        new THREE.MeshStandardMaterial({ color: '#fbbf24', transparent: true, opacity: 0.45, roughness: 0.4 }),
+      );
+      this.world.add(this.ghost);
+    }
+    this.ghost.visible = !!ghost;
+    if (ghost) this.ghost.position.set(...ghost);
+  }
+
   setPalette(i: number): void {
     this.paletteIndex = ((i % BALL_PALETTES.length) + BALL_PALETTES.length) % BALL_PALETTES.length;
     if (!this.ballMat) return;
@@ -166,6 +311,20 @@ export class Viewport {
 
   /** Latest physics state from the worker. */
   setSnapshot(s: EnvSnapshot): void {
+    if (this.obbyBall) {
+      if (this.replayMode || !this.obby) return;
+      const b = s.bodies.ball;
+      this.setObbyStage(s.info.stage ?? 0);
+      this.snapPos.set(b.p[0], b.p[1], b.p[2]);
+      this.snapQuat.set(b.q[0], b.q[1], b.q[2], b.q[3]);
+      if (s.dyn) this.obby.applyDyn(s.dyn);
+      if (s.epoch !== this.epoch) {
+        this.epoch = s.epoch;
+        this.ball.position.copy(this.snapPos);
+        this.ball.quaternion.copy(this.snapQuat);
+      }
+      return;
+    }
     const b = s.bodies.ball;
     const t = s.bodies.target;
     this.snapPos.set(b.p[0], b.p[1], b.p[2]);
@@ -244,11 +403,20 @@ export class Viewport {
   private frame(dt: number, now: number, dtMs: number): void {
     if (this.ball) {
       const k = 1 - Math.exp(-38 * dt);
+      if (!Number.isFinite(this.ball.position.x + this.ball.position.y + this.ball.position.z)) this.ball.position.copy(this.snapPos);
       this.ball.position.lerp(this.snapPos, k);
       this.ball.quaternion.slerp(this.snapQuat, k);
-      this.targetGroup.position.lerp(this.snapTarget, 1 - Math.exp(-30 * dt));
-      this.controls.update(dt, this.ball.position);
-      if (this.flash > 0) {
+      if (this.obbyBall) {
+        // shadow light follows the ball so a small, sharp shadow map covers the action
+        const bp = this.ball.position;
+        this.light.target.position.set(bp.x, bp.y, bp.z);
+        this.light.position.set(bp.x + 9, bp.y + 22, bp.z + 7);
+        this.controls.update(dt, this.ball.position);
+      } else {
+        this.targetGroup.position.lerp(this.snapTarget, 1 - Math.exp(-30 * dt));
+        this.controls.update(dt, this.ball.position);
+      }
+      if (!this.obbyBall && this.flash > 0) {
         this.flash = Math.max(0, this.flash - dt * 2.2);
         this.targetMat.emissiveIntensity = 0.12 + this.flash * 1.6;
       }

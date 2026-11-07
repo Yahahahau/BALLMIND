@@ -2,7 +2,10 @@ import { SimClient } from '../app/simClient';
 import { TASK_CATALOG } from '../core/tasks/catalog';
 import type { TaskInfo } from '../core/task/types';
 import { modelFromJson, modelToJson, ModelBlob, TrainingStats } from '../core/training/model';
-import { deleteModel, loadModel, loadSettings, saveModel, saveSettings, Settings } from '../persist/db';
+import { deleteModel, deleteReplays, loadModel, loadReplays, loadSettings, saveModel, saveReplays, saveSettings, Settings } from '../persist/db';
+import { ReplayStore } from '../persist/replayStore';
+import { ObbyPanel } from './obbyPanel';
+import { ReplayViewer } from './replayViewer';
 import { BALL_PALETTES } from '../render/ballStyle';
 import { QualityMode, Viewport } from '../render/viewport';
 import type { FromWorker, RunStateName } from '../worker/protocol';
@@ -51,6 +54,11 @@ export class App {
   private fps = 0;
   private dps = 0;
   private tier = 'high';
+  private obbyPanel: ObbyPanel | null = null;
+  private replays = new ReplayStore();
+  private replayViewer: ReplayViewer | null = null;
+  private resumeAfterReplay = false;
+  private isObby = false;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -97,8 +105,9 @@ export class App {
         <div class="vp-tools"><button id="camReset" aria-label="Reset camera">⌖ Camera</button></div>
       </section>
 
-      <aside class="side">
-        <section class="panel">
+      <aside class="side" id="side">
+        <div id="obbyHost"></div>
+        <section class="panel g-only">
           <h2>AI TRAINING</h2>
           <div class="stats" id="stats">
             ${STAT_DEFS.map(
@@ -109,7 +118,7 @@ export class App {
           <div class="label-sm" id="statsFoot"></div>
         </section>
 
-        <section class="panel">
+        <section class="panel g-only">
           <h2>TRAINING CONTROLS</h2>
           <div class="row">
             <button class="btn primary" id="btnMain">▶ Start Training</button>
@@ -125,7 +134,7 @@ export class App {
           </div>
         </section>
 
-        <section class="panel graphs">
+        <section class="panel graphs g-only">
           <h2>LEARNING GRAPH</h2>
           <div class="gt"><span>Reward per episode <span style="color:#2dd4bf">— smoothed</span></span><span>episodes</span></div>
           <canvas id="gReward"></canvas>
@@ -153,24 +162,30 @@ export class App {
     const ids = [
       'viewport', 'taskChip', 'dot', 'statusText', 'fps', 'hudEp', 'hudEps', 'hudAct', 'hudDemo', 'camReset',
       'statsFoot', 'btnMain', 'btnResetEnv', 'btnResetAI', 'speedSeg', 'btnDemo', 'gReward', 'gSuccess',
-      'btnExport', 'btnImport', 'btnPalette', 'qualSeg', 'saveInfo', 'fileIn', 'tierLbl',
+      'obbyHost', 'side', 'btnExport', 'btnImport', 'btnPalette', 'qualSeg', 'saveInfo', 'fileIn', 'tierLbl',
     ];
     for (const id of ids) this.el[id] = this.root.querySelector('#' + id) as HTMLElement;
     for (const s of STAT_DEFS) this.el['st-' + s.key] = this.root.querySelector('#st-' + s.key) as HTMLElement;
 
     this.graphs = new LearningGraphs(this.el.gReward as HTMLCanvasElement, this.el.gSuccess as HTMLCanvasElement);
 
+    this.obbyPanel = new ObbyPanel({
+      send: (m) => this.sim?.send(m),
+      toggleRun: () => this.toggleRun(),
+      save: () => this.requestSave('manual'),
+      resetAI: () => void this.resetAI(),
+      openReplay: () => this.openReplay(),
+      toggleDemo: () => this.toggleDemo(),
+      setSpeed: (v) => this.setSpeed(v),
+      setOverview: (on) => this.viewport.setOverview(on),
+    });
+    this.el.obbyHost.appendChild(this.obbyPanel.root);
     this.el.taskChip.addEventListener('click', () => this.changeTask());
     this.el.camReset.addEventListener('click', () => this.viewport.controls.reset());
     this.el.btnMain.addEventListener('click', () => this.toggleRun());
     this.el.btnResetEnv.addEventListener('click', () => this.sim?.send({ type: 'resetEnv' }));
     this.el.btnResetAI.addEventListener('click', () => void this.resetAI());
-    this.el.btnDemo.addEventListener('click', () => {
-      this.demo = !this.demo;
-      this.sim?.send({ type: 'demo', on: this.demo });
-      if (this.demo && this.runState === 'idle') this.sim?.send({ type: 'start' });
-      this.renderControls();
-    });
+    this.el.btnDemo.addEventListener('click', () => this.toggleDemo());
     this.el.speedSeg.addEventListener('click', (e) => {
       const b = (e.target as HTMLElement).closest('button');
       if (!b) return;
@@ -206,9 +221,16 @@ export class App {
   // ------------------------------------------------------------------ task / worker
 
   private async startTask(info: TaskInfo): Promise<void> {
+    this.replayViewer?.close();
     this.task = info;
+    this.isObby = info.id === 'obby-challenge';
+    this.root.classList.toggle('is-obby', this.isObby);
     this.el.taskChip.textContent = info.title + ' ▾';
-    this.viewport.buildTask(info.geometry);
+    if (this.isObby) this.viewport.buildObby();
+    else this.viewport.buildTask(info.geometry);
+    this.obbyPanel?.clear();
+    this.replays.clear();
+    if (this.isObby) this.replays.set(await loadReplays(info.id));
     this.sim?.terminate();
     clearInterval(this.saveTimer);
     this.graphs.clear();
@@ -239,6 +261,7 @@ export class App {
     switch (m.type) {
       case 'ready':
         this.graphs.setHistory(m.history);
+        this.obbyPanel?.setHistory(m.history, m.loss);
         this.lastStats = m.stats;
         this.lastSuccesses = m.stats.successes;
         this.renderStats(true);
@@ -246,14 +269,17 @@ export class App {
         break;
       case 'frame': {
         this.viewport.setSnapshot(m.snap);
+        if (m.traces.length) this.replays.add(m.traces);
+        for (const n of m.notices) toast(n.text, false, 4000);
         this.runState = m.state;
         this.dps = m.dps;
         this.lastStats = m.stats;
-        if (m.episodes.length) {
+        if (m.episodes.length || m.loss.length) {
           this.graphs.push(m.episodes);
+          this.obbyPanel?.push(m.episodes, m.loss);
           this.graphDirty = true;
         }
-        if (this.lastSuccesses >= 0 && m.stats.successes > this.lastSuccesses) this.viewport.flashTarget();
+        if (!this.isObby && this.lastSuccesses >= 0 && m.stats.successes > this.lastSuccesses) this.viewport.flashTarget();
         this.lastSuccesses = m.stats.successes;
         if (this.task) this.el.hudAct.textContent = this.task.actionLabels[m.snap.action] ?? '—';
         const now = performance.now();
@@ -266,12 +292,14 @@ export class App {
         if (this.graphDirty && now - this.lastGraph > 400) {
           this.lastGraph = now;
           this.graphDirty = false;
-          this.graphs.redraw();
+          if (this.isObby) this.obbyPanel?.redrawGraphs();
+          else this.graphs.redraw();
         }
         break;
       }
       case 'saved':
         if (m.reason === 'switch' || m.reason === 'hidden' || m.reason === 'pagehide' || !this.demo) {
+          if (this.isObby) void saveReplays(m.model.taskId, this.replays.records);
           saveModel(m.model)
             .then(() => {
               if (m.reason === 'auto' || m.reason === 'manual')
@@ -294,6 +322,7 @@ export class App {
       }
       case 'loaded':
         this.graphs.setHistory(m.history);
+        this.obbyPanel?.setHistory(m.history, m.loss);
         this.lastStats = m.stats;
         this.lastSuccesses = m.stats.successes;
         this.renderStats(true);
@@ -302,6 +331,8 @@ export class App {
         break;
       case 'reset-ai':
         this.graphs.clear();
+        this.obbyPanel?.clear();
+        this.replays.clear();
         this.lastStats = m.stats;
         this.lastSuccesses = 0;
         this.renderStats(true);
@@ -317,6 +348,23 @@ export class App {
   }
 
   // ------------------------------------------------------------------ actions
+
+  private toggleDemo(): void {
+    this.demo = !this.demo;
+    this.sim?.send({ type: 'demo', on: this.demo });
+    if (this.demo && this.runState === 'idle') this.sim?.send({ type: 'start' });
+    this.renderControls();
+  }
+
+  private openReplay(): void {
+    if (this.replayViewer || !this.isObby) return;
+    this.resumeAfterReplay = this.runState === 'running';
+    if (this.resumeAfterReplay) this.sim?.send({ type: 'pause' });
+    this.replayViewer = new ReplayViewer(this.viewport, this.el.viewport, this.replays, () => {
+      this.replayViewer = null;
+      if (this.resumeAfterReplay) this.sim?.send({ type: 'resume' });
+    });
+  }
 
   private toggleRun(): void {
     if (!this.sim) return;
@@ -348,6 +396,7 @@ export class App {
     this.sim?.send({ type: 'demo', on: false });
     this.sim?.send({ type: 'resetAI' });
     await deleteModel(this.task.id).catch(() => undefined);
+    await deleteReplays(this.task.id);
     this.el.saveInfo.textContent = 'AI reset. Saved data cleared.';
     toast('AI training reset');
   }
@@ -378,6 +427,7 @@ export class App {
     this.el.hudDemo.hidden = !this.demo;
     this.el.speedSeg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', Number((x as HTMLElement).dataset.v) === this.settings.speed));
     this.el.qualSeg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', (x as HTMLElement).dataset.v === this.settings.quality));
+    if (this.isObby && this.lastStats) this.obbyPanel?.update(this.lastStats, this.runState, this.demo, this.settings.speed);
     this.el.tierLbl.textContent = this.settings.quality === 'auto' ? `(auto → ${this.tier})` : '';
   }
 

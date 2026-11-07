@@ -12,6 +12,11 @@ export interface BallParams {
   jumpSpeed: number;
   /** Linear damping strength used by the "stop" action (1/s). */
   brake: number;
+  /** Optional overrides (defaults keep the original Reach The Square feel). */
+  restitution?: number;
+  friction?: number;
+  linearDamping?: number;
+  angularDamping?: number;
 }
 
 export const DEFAULT_BALL: BallParams = {
@@ -40,10 +45,10 @@ export class BallAgent {
   ) {
     const { body, collider } = physics.createDynamicSphere(start, params.radius, {
       mass: params.mass,
-      friction: 0.9,
-      restitution: 0.3,
-      linearDamping: 0.6,
-      angularDamping: 0.25,
+      friction: params.friction ?? 0.9,
+      restitution: params.restitution ?? 0.3,
+      linearDamping: params.linearDamping ?? 0.6,
+      angularDamping: params.angularDamping ?? 0.25,
     });
     this.body = body;
     this.collider = collider;

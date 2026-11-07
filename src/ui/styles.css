@@ -486,3 +486,32 @@ button {
     transition: none !important;
   }
 }
+
+/* ---------- Obby dashboard ---------- */
+.obby-host { display: flex; flex-direction: column; gap: 10px; }
+
+.muted { color: var(--muted); font-weight: 500; letter-spacing: 0.04em; }
+.chips { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.chip { position: relative; overflow: hidden; background: var(--panel-2); border: 1px solid var(--line); border-top: 3px solid var(--c); border-radius: 10px; color: var(--text); padding: 6px 4px 8px; text-align: center; font: inherit; cursor: pointer; min-width: 0; }
+.chip b { display: block; font-size: 16px; }
+.chip span { display: block; font-size: 9.5px; line-height: 1.15; min-height: 22px; }
+.chip small { display: block; font-size: 9px; color: var(--muted); }
+.chip.on { outline: 2px solid var(--c); }
+.chip.locked { opacity: 0.5; }
+.chip i { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--c); }
+.sliders { display: grid; gap: 8px; margin: 10px 0; }
+.sl span { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+.sl b { color: var(--text); }
+.sl input { width: 100%; accent-color: var(--accent); }
+.sel { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px; font: inherit; }
+.seg.disabled { opacity: 0.45; pointer-events: none; }
+.replay-dock { position: absolute; left: 10px; right: 10px; bottom: 10px; background: rgba(18, 23, 33, 0.92); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; z-index: 5; backdrop-filter: blur(6px); }
+.replay-dock .row { align-items: center; }
+.replay-dock select { max-width: 100%; flex: 1 1 140px; }
+.replay-dock input[type=range] { width: 100%; accent-color: var(--accent); }
+.replay-dock canvas { width: 100%; height: 14px; display: block; }
+.replay-dock .btn { padding: 8px 12px; }
+
+.is-obby .g-only { display: none !important; }
+.root-obby-hide { display:none; }
+.obby-host { display: none; } .is-obby .obby-host { display: flex; }

@@ -2,7 +2,7 @@ import type { EpisodeRecord } from '../core/training/model';
 
 const MAX_POINTS = 260;
 
-interface Series {
+export interface Series {
   values: number[];
   color: string;
   width: number;
@@ -10,7 +10,7 @@ interface Series {
 }
 
 /** Tiny dependency-free canvas line chart. */
-class Chart {
+export class Chart {
   private ctx: CanvasRenderingContext2D;
   private w = 0;
   private h = 0;

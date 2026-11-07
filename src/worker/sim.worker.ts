@@ -31,7 +31,10 @@ function frame(): void {
   last = t;
   mgr.advance(dt, BUDGET_MS);
   const episodes = mgr.drainEpisodes();
-  if (mgr.dirty || episodes.length || !sentOnce) {
+  const traces = mgr.drainTraces();
+  const notices = mgr.drainNotices();
+  const loss = mgr.drainLoss();
+  if (mgr.dirty || episodes.length || traces.length || !sentOnce) {
     sentOnce = true;
     mgr.dirty = false;
     post({
@@ -39,6 +42,9 @@ function frame(): void {
       snap: mgr.snapshot(),
       stats: mgr.stats(),
       episodes,
+      loss,
+      traces,
+      notices,
       state: mgr.state,
       dps: mgr.decisionsPerSecond,
     });
@@ -61,7 +67,7 @@ ctx.onmessage = async (e) => {
         }
       }
       last = performance.now();
-      post({ type: 'ready', info: mgr.task.info, stats: mgr.stats(), history: mgr.fullHistory(), restored });
+      post({ type: 'ready', info: mgr.task.info, stats: mgr.stats(), history: mgr.fullHistory(), loss: mgr.fullLoss(), restored });
       setInterval(frame, TICK_MS);
       return;
     }
@@ -79,6 +85,12 @@ ctx.onmessage = async (e) => {
       case 'speed':
         mgr.setSpeed(m.value);
         break;
+      case 'stop':
+        mgr.stop();
+        break;
+      case 'command':
+        mgr.command(m.cmd, m.arg);
+        break;
       case 'resetEnv':
         mgr.resetEnvironment();
         break;
@@ -90,7 +102,7 @@ ctx.onmessage = async (e) => {
         mgr.setDemo(m.on);
         break;
       case 'save': {
-        const model = mgr.exportModel();
+        const model = mgr.exportModel(true);
         post({ type: 'saved', model, reason: m.reason });
         break;
       }
@@ -99,7 +111,7 @@ ctx.onmessage = async (e) => {
         break;
       case 'load':
         mgr.importModel(m.model);
-        post({ type: 'loaded', stats: mgr.stats(), history: mgr.fullHistory() });
+        post({ type: 'loaded', stats: mgr.stats(), history: mgr.fullHistory(), loss: mgr.fullLoss() });
         break;
     }
     mgr.dirty = true;

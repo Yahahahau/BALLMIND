@@ -1,4 +1,4 @@
-import type { ModelBlob } from '../core/training/model';
+import type { ModelBlob, ReplayRecord } from '../core/training/model';
 
 /** Minimal IndexedDB key/value store. Every call degrades gracefully if storage is unavailable. */
 const DB_NAME = 'ballmind';
@@ -70,3 +70,14 @@ export async function loadSettings(): Promise<Partial<Settings>> {
 }
 
 export const saveSettings = (s: Settings) => put('settings', s).catch(() => undefined);
+
+const replayKey = (taskId: string) => `replays:${taskId}`;
+export const saveReplays = (taskId: string, r: ReplayRecord[]) => put(replayKey(taskId), r).catch(() => undefined);
+export const deleteReplays = (taskId: string) => del(replayKey(taskId)).catch(() => undefined);
+export async function loadReplays(taskId: string): Promise<ReplayRecord[]> {
+  try {
+    return (await get<ReplayRecord[]>(replayKey(taskId))) ?? [];
+  } catch {
+    return [];
+  }
+}

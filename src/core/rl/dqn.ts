@@ -1,5 +1,5 @@
 import { DenseNetwork } from '../nn/dense';
-import { ReplayBuffer } from './replayBuffer';
+import { ReplayBuffer, ReplayDump } from './replayBuffer';
 import { Rng } from '../math/rng';
 
 export interface DQNConfig {
@@ -109,6 +109,14 @@ export class DQNAgent {
     const c = this.config;
     const f = Math.min(1, this.epsSteps / c.epsDecaySteps);
     return c.epsStart + (c.epsEnd - c.epsStart) * f;
+  }
+
+  /** Raise epsilon to at least `eps` (it then decays again) – used when a harder stage unlocks. */
+  boostExploration(eps: number): void {
+    const c = this.config;
+    if (this.epsilon >= eps) return;
+    const f = (c.epsStart - eps) / (c.epsStart - c.epsEnd);
+    this.epsSteps = Math.floor(Math.max(0, f) * c.epsDecaySteps);
   }
 
   /** Re-initialise everything (weights, optimiser, replay, schedules). */
@@ -238,5 +246,10 @@ export class DQNAgent {
     this.trainSteps = s.trainSteps;
     this.epsSteps = s.epsSteps;
     this.replay.clear();
+  }
+
+  /** Restore replay memory saved by `ReplayBuffer.dump`. */
+  loadReplay(d: ReplayDump): void {
+    this.replay.load(d);
   }
 }
