@@ -34,18 +34,18 @@ function stage2(): StageDef {
   const b = new CourseBuilder().start(5, 4);
   b.plat({ len: 6, w: 1.8 })
     .plat({ len: 3, w: 1.8, turn: 90 })
-    .plat({ len: 4, w: 1.6 })
+    .plat({ len: 4, w: 1.8 })
     .plat({ len: 2, w: 2, gap: 1.6 })
     .checkpoint({ len: 3, w: 2.6, gap: 1.4 })
-    .plat({ len: 5, w: 1.5, turn: -90 })
+    .plat({ len: 5, w: 1.7, turn: -90 })
     .plat({ len: 3.5, w: 2.4, tilt: [0, 9] })
     .plat({ len: 2, w: 1.8, gap: 1.8, dy: 0.4 })
     .plat({ len: 2, w: 1.8, gap: 2.0, turn: 45 })
     .plat({ len: 2, w: 1.6, gap: 2.0, turn: -45, dy: -0.3 })
     .checkpoint({ len: 3, w: 2.6, gap: 1.6 })
-    .plat({ len: 6, w: 1.3 })
-    .plat({ len: 3, w: 1.4, turn: 90 })
-    .plat({ len: 4, w: 1.3, turn: -90 })
+    .plat({ len: 6, w: 1.8 })
+    .plat({ len: 3, w: 1.7, turn: 90 })
+    .plat({ len: 4, w: 1.6, turn: -90 })
     .plat({ len: 4, w: 2, tilt: [-8, 0] })
     .plat({ len: 1.8, w: 1.8, gap: 2.2 })
     .plat({ len: 1.8, w: 1.8, gap: 2.4, dy: 0.5 })
@@ -124,7 +124,7 @@ function stage4(): StageDef {
 /** STAGE 05 — THE FINAL GAUNTLET (Nightmare): everything combined, almost no resting places. */
 function stage5(): StageDef {
   const b = new CourseBuilder().start(8, 5);
-  b.plat({ len: 3, w: 3, gap: 4.6 }) // big gap, needs a full run-up
+  b.plat({ len: 3, w: 3, gap: 4.0 }) // big gap, needs a full run-up
     .plat({ len: 2, w: 1.8, gap: 2.4, dy: 0.4 })
     .plat({ len: 5, w: 1.5, gap: 1.8, turn: 35 })
     .plat({ len: 4, w: 1.5, turn: -70 })
@@ -143,7 +143,7 @@ function stage5(): StageDef {
     .spinner({ length: 2.6, speed: 2.1, height: 0.5 })
     .slippery({ len: 3.5, w: 1.8, gap: 1.4, tilt: [0, 6] })
     .spinning({ len: 3, w: 3, speed: -1.1, gap: 1.8 })
-    .plat({ len: 1.8, w: 1.8, gap: 4.4, dy: 0.3 })
+    .plat({ len: 1.8, w: 1.8, gap: 3.8, dy: 0.3 })
     .mover({ axis: 'forward', amp: 2.2, period: 4.6, len: 2.6, w: 2.4, gap: 1.2, phase: 2 })
     .finish({ len: 6, w: 5, gap: 1.2 });
   return {

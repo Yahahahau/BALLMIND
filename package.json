@@ -9,7 +9,9 @@
     "build": "tsc && vite build",
     "typecheck": "tsc",
     "preview": "vite preview",
-    "test:learn": "tsx scripts/train-headless.ts"
+    "test:learn": "tsx scripts/train-headless.ts",
+    "test:obby": "tsx scripts/test-obby-physics.ts && tsx scripts/test-training.ts",
+    "train:obby": "tsx scripts/train-obby.ts"
   },
   "keywords": [],
   "author": "",

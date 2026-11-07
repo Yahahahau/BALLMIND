@@ -22,6 +22,19 @@ AI ต้องควบคุมลูกบอลให้ไปสัมผ�
 
 เวลาเฉลี่ยในการเข้าเป้าลดจาก ~5 วินาที เหลือ ~1.3 วินาที
 
+## ภารกิจ 02: OBBY CHALLENGE
+สนามอุปสรรค 5 ด่าน (THE GAP → NARROW PATH → MOVING PLATFORMS → ROTATION & PRECISION → THE FINAL GAUNTLET) แต่ละด่านมีจุดเริ่ม เช็คพอยต์ และเส้นชัย · แพลตฟอร์มเคลื่อนที่/หมุนและแท่งกวาดเป็น kinematic body ของ Rapier ที่ชนกับลูกบอลจริง (ไม่มี teleport ข้ามสิ่งกีดขวาง; ตกแล้วเกิดใหม่ที่เช็คพอยต์ล่าสุดโดยสมองและ replay buffer ยังอยู่)
+
+- **สมองเดียวทุกด่าน**: DQN เดิม (Double DQN, target network, replay, ε-greedy) · Observation 83 ค่า (สถานะลูกบอล, แพลตฟอร์มถัดไป, เซ็นเซอร์ raycast พื้น/ข้าง/ใต้เท้า, สิ่งกีดขวางที่เคลื่อนที่, เช็คพอยต์, ความคืบหน้า) · 15 Action · MLP 83→96→96→15
+- **Reward**: potential-based shaping ตามความคืบหน้าบนเส้นทาง + รางวัลลงจอด/เช็คพอยต์ (ครั้งเดียวต่อรอบ) + เส้นชัย − ตก − เวลา · ตกแล้วศักย์ลดลง จึงไม่มีช่องโกงวนลูป
+- **Curriculum**: ปลดล็อกด่านถัดไปเมื่ออัตราสำเร็จ/ความคืบหน้า/เวลาเฉลี่ยผ่านเกณฑ์ (ปรับได้ในหน้า) · ซ้อมด่านเก่า 25% กันลืม · เลือกด่านเองได้ · เริ่มจากเช็คพอยต์ได้ (นับเป็นการฝึก ไม่นับเป็นสำเร็จทั้งด่าน)
+- **Dashboard**: 15 ค่าสถิติ + กราฟจริง 5 เส้น (Reward, Success Rate, Completion Time, Checkpoint Progress, Training Loss) แยกตามด่าน · กล้องตามบอล + Overview Camera
+- **Training Replay**: เลือก episode, เล่น/หยุด/ซ้ำ/Slow-motion/ไทม์ไลน์, จุดเช็คพอยต์และจุดตกบนเส้นทาง, เปรียบเทียบ episode เก่ากับใหม่ (บันทึกเฉพาะตำแหน่งบอล เพราะแพลตฟอร์มเป็นฟังก์ชันของเวลา)
+- **บันทึก/โหลด**: IndexedDB เก็บ weights, target, replay buffer (int8), สถิติ, curriculum, loss, replays · Export/Import JSON มีตรวจเวอร์ชัน/ขนาดโมเดลก่อนโหลด
+
+### ผลเทรนจริง (headless `npx tsx scripts/train-obby.ts`, ไม่มีสคริปต์ช่วย)
+ด่าน 1 ผ่านได้ที่ ~70k สเต็ป, ด่าน 2 เริ่มผ่านที่ ~600k, ด่าน 3 ปลดล็อกและเริ่มผ่านที่ ~1M สเต็ป (ดูตัวเลขล่าสุดในรายงานของงานนี้) ด่าน 4–5 ยังต้องเทรนต่อ — ระบบแยกชัดเจนว่า "AI ยังไม่เก่ง" ต่างจาก "ระบบพัง" ด้วย `scripts/test-obby-physics.ts` และ `scripts/test-training.ts`
+
 ## เทคโนโลยี
 - **Three.js** (WebGL2, PBR, real-time shadow map 2048², bias/normalBias ปรับตามขนาดฉาก) · **Rapier** physics (fixed timestep 1/60 s)
 - **Double DQN** เขียนเอง: MLP 17→64→64→14, Experience Replay (50k), ε-greedy, Target Network, Adam, Huber loss, gradient clipping
