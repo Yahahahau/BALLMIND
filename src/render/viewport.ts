@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { SkyboxManager } from './skybox';
 import type { EnvSnapshot } from '../core/task/types';
 import { BALL_PALETTES, createCheckerTexture, createGridTexture } from './ballStyle';
 import { CameraController } from './cameraController';
@@ -24,6 +24,12 @@ export class Viewport {
   onFps: (fps: number, tier: Tier) => void = () => undefined;
 
   private readonly light: THREE.DirectionalLight;
+  readonly sky: SkyboxManager;
+  private hemi: THREE.HemisphereLight;
+  private lightDir = new THREE.Vector3(7, 12, 5).normalize();
+  private fogNear = 28;
+  private fogFar = 62;
+  private overviewOn = false;
   private ball!: THREE.Mesh;
   private ballMat!: THREE.MeshPhysicalMaterial;
   private targetGroup = new THREE.Group();
@@ -68,17 +74,11 @@ export class Viewport {
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.className = 'gl';
 
-    const bg = new THREE.Color('#1b2130');
-    this.scene.background = bg;
-    this.scene.fog = new THREE.Fog(bg, 28, 62);
-
-    // Image-based light for soft reflections on the ball; kept subtle.
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.3;
-    pmrem.dispose();
-
-    this.scene.add(new THREE.HemisphereLight(0xdfe9ff, 0x3b3a40, 0.32));
+    // Sky + image-based light live in SkyboxManager (default blue sky, import, fallback environment).
+    this.sky = new SkyboxManager(this.renderer, this.scene);
+    this.scene.fog = new THREE.Fog(this.sky.flatColor, 28, 62);
+    this.hemi = new THREE.HemisphereLight(0xdfe9ff, 0x3b3a40, 0.32);
+    this.scene.add(this.hemi);
 
     // Key light. Shadow frustum is fitted tightly around the arena; bias values tuned visually.
     this.light = new THREE.DirectionalLight(0xfff1de, 2.0);
@@ -96,6 +96,7 @@ export class Viewport {
     this.scene.add(this.light, this.light.target);
 
     this.scene.add(this.world);
+    this.sky.onChange = () => this.applyAtmosphere();
     this.controls = new CameraController(this.camera, this.renderer.domElement);
 
     this.resizeObs = new ResizeObserver(() => this.resize());
@@ -116,11 +117,13 @@ export class Viewport {
     sc.right = sc.top = 9.5;
     sc.far = 32;
     sc.updateProjectionMatrix();
-    this.light.position.set(7, 12, 5);
+    this.light.position.copy(this.lightDir).multiplyScalar(14.9);
     this.light.target.position.set(0, 0, 0);
-    this.scene.fog = new THREE.Fog(this.scene.background as THREE.Color, 28, 62);
+    this.fogNear = 28;
+    this.fogFar = 62;
     this.camera.far = 120;
     this.camera.updateProjectionMatrix();
+    this.applyAtmosphere();
     const half = g.arenaHalf;
     const thick = g.floorThickness;
 
@@ -176,6 +179,53 @@ export class Viewport {
     this.epoch = -1;
   }
 
+  /**
+   * Derives lighting from the sky currently in the scene (colour, sun direction, brightness) and applies the
+   * user's independent look controls. Does nothing to physics or the AI.
+   */
+  applyAtmosphere(): void {
+    const sk = this.sky;
+    const a = sk.analysis;
+    const st = sk.settings;
+    const base = { hemi: 0.32, key: 2.0, exposure: 0.9 };
+    const tint = new THREE.Color();
+    let keyI = base.key, hemiI = base.hemi;
+    this.light.color.set(0xfff1de);
+    this.hemi.color.set(0xdfe9ff);
+    this.hemi.groundColor.set(0x3b3a40);
+    this.lightDir.set(7, 12, 5).normalize();
+    let fog = sk.flatColor;
+    if (a && st.adapt) {
+      // dark skies (storm / dusk) get less light, bright skies a bit more; colours follow the sky
+      const f = Math.min(1.2, Math.max(0.7, 0.65 + 0.7 * a.luma));
+      keyI *= f;
+      hemiI *= 0.8 + 0.5 * a.luma;
+      this.hemi.color.copy(tint.copy(a.zenith).lerp(new THREE.Color(1, 1, 1), 0.4));
+      this.hemi.groundColor.copy(tint.copy(a.ground).multiplyScalar(0.6).lerp(new THREE.Color(0x3b3a40), 0.5));
+      this.light.color.copy(new THREE.Color(0xfff1de).lerp(a.sunColor, 0.6 * a.sunStrength));
+      if (a.sunStrength > 0.2) {
+        const d = a.sunDir.clone();
+        const el = Math.min(75, Math.max(38, (Math.asin(Math.max(-1, Math.min(1, d.y))) * 180) / Math.PI));
+        const h = Math.hypot(d.x, d.z) || 1;
+        const r = (el * Math.PI) / 180;
+        this.lightDir.set((d.x / h) * Math.cos(r), Math.sin(r), (d.z / h) * Math.cos(r)).normalize();
+      }
+    }
+    if (a) fog = tint.copy(a.horizon).multiplyScalar(0.92);
+    this.light.intensity = keyI;
+    this.hemi.intensity = hemiI * st.ambient;
+    this.light.shadow.intensity = st.shadow;
+    this.renderer.toneMappingExposure = base.exposure * st.exposure;
+    this.renderer.domElement.style.filter = `contrast(${st.contrast}) saturate(${st.saturation})`;
+    const fogO = this.scene.fog as THREE.Fog | null;
+    if (fogO) {
+      fogO.color.copy(fog);
+      fogO.near = this.overviewOn ? 200 : this.fogNear;
+      fogO.far = this.overviewOn ? 400 : this.fogFar;
+    }
+    if (!this.obbyBall) this.light.position.copy(this.lightDir).multiplyScalar(14.9);
+  }
+
   private makeBall(radius: number): void {
     this.ballMat = new THREE.MeshPhysicalMaterial({
       map: createCheckerTexture(BALL_PALETTES[this.paletteIndex], this.aniso),
@@ -201,6 +251,7 @@ export class Viewport {
     this.overlays = new THREE.Group();
     this.replayMode = false;
     this.overview = false;
+    this.overviewOn = false;
   }
 
   /** Obby: floating platforms in the void. The ball is the same checkerboard ball. */
@@ -217,9 +268,11 @@ export class Viewport {
     sc.right = sc.top = 16;
     sc.far = 70;
     sc.updateProjectionMatrix();
-    this.scene.fog = new THREE.Fog(this.scene.background as THREE.Color, 40, 90);
+    this.fogNear = 40;
+    this.fogFar = 90;
     this.camera.far = 160;
     this.camera.updateProjectionMatrix();
+    this.applyAtmosphere();
     this.controls.dist = 13;
     this.controls.followScale = 1;
     this.setObbyStage(0);
@@ -242,9 +295,8 @@ export class Viewport {
     this.overview = on;
     this.controls.setOverview(on, this.stageCenter, this.stageSize);
     // The top-down camera sits far above the course: don't let fog swallow it.
-    const f = this.scene.fog as THREE.Fog;
-    f.near = on ? 200 : 40;
-    f.far = on ? 400 : 90;
+    this.overviewOn = on;
+    this.applyAtmosphere();
     this.camera.far = on ? 500 : 160;
     this.camera.updateProjectionMatrix();
   }
@@ -410,7 +462,7 @@ export class Viewport {
         // shadow light follows the ball so a small, sharp shadow map covers the action
         const bp = this.ball.position;
         this.light.target.position.set(bp.x, bp.y, bp.z);
-        this.light.position.set(bp.x + 9, bp.y + 22, bp.z + 7);
+        this.light.position.set(bp.x + this.lightDir.x * 25, bp.y + this.lightDir.y * 25, bp.z + this.lightDir.z * 25);
         this.controls.update(dt, this.ball.position);
       } else {
         this.targetGroup.position.lerp(this.snapTarget, 1 - Math.exp(-30 * dt));

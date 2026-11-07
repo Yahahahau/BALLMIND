@@ -59,6 +59,7 @@ export interface Settings {
   speed: number;
   quality: 'auto' | 'high' | 'medium' | 'low';
   palette: number;
+  sky?: { source: 'default' | 'custom' | 'none'; values: import('../render/skybox').SkySettings };
 }
 
 export async function loadSettings(): Promise<Partial<Settings>> {
@@ -79,5 +80,16 @@ export async function loadReplays(taskId: string): Promise<ReplayRecord[]> {
     return (await get<ReplayRecord[]>(replayKey(taskId))) ?? [];
   } catch {
     return [];
+  }
+}
+
+/** The imported skybox files (kept local in IndexedDB so the sky survives reloads). */
+export const saveSky = (s: import('../render/skybox').StoredSky) => put('skybox', s).catch(() => undefined);
+export const deleteSky = () => del('skybox').catch(() => undefined);
+export async function loadSky(): Promise<import('../render/skybox').StoredSky | undefined> {
+  try {
+    return await get('skybox');
+  } catch {
+    return undefined;
   }
 }

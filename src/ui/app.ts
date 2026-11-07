@@ -5,6 +5,7 @@ import { modelFromJson, modelToJson, ModelBlob, TrainingStats } from '../core/tr
 import { deleteModel, deleteReplays, loadModel, loadReplays, loadSettings, saveModel, saveReplays, saveSettings, Settings } from '../persist/db';
 import { ReplayStore } from '../persist/replayStore';
 import { ObbyPanel } from './obbyPanel';
+import { SkyPanel } from './skyPanel';
 import { ReplayViewer } from './replayViewer';
 import { BALL_PALETTES } from '../render/ballStyle';
 import { QualityMode, Viewport } from '../render/viewport';
@@ -55,6 +56,7 @@ export class App {
   private dps = 0;
   private tier = 'high';
   private obbyPanel: ObbyPanel | null = null;
+  private skyPanel: SkyPanel | null = null;
   private replays = new ReplayStore();
   private replayViewer: ReplayViewer | null = null;
   private resumeAfterReplay = false;
@@ -68,6 +70,12 @@ export class App {
     Object.assign(this.settings, await loadSettings());
     this.buildShell();
     this.viewport = new Viewport(this.el.viewport);
+    this.skyPanel = new SkyPanel(this.viewport.sky, (source, values) => {
+      this.settings.sky = { source, values };
+      void saveSettings(this.settings);
+    });
+    this.el.side.appendChild(this.skyPanel.root);
+    void this.skyPanel.init(this.settings.sky);
     (window as unknown as { __ballmind?: App }).__ballmind = this; // handy for debugging / automated tests
     this.viewport.setPalette(this.settings.palette);
     this.viewport.setQuality(this.settings.quality);

@@ -35,6 +35,12 @@ AI ต้องควบคุมลูกบอลให้ไปสัมผ�
 ### ผลเทรนจริง (headless `npx tsx scripts/train-obby.ts`, ไม่มีสคริปต์ช่วย)
 ด่าน 1 ผ่านได้ที่ ~70k สเต็ป, ด่าน 2 เริ่มผ่านที่ ~600k, ด่าน 3 ปลดล็อกและเริ่มผ่านที่ ~1M สเต็ป (ดูตัวเลขล่าสุดในรายงานของงานนี้) ด่าน 4–5 ยังต้องเทรนต่อ — ระบบแยกชัดเจนว่า "AI ยังไม่เก่ง" ต่างจาก "ระบบพัง" ด้วย `scripts/test-obby-physics.ts` และ `scripts/test-training.ts`
 
+## 3D World · Skybox & Atmosphere
+- ค่าเริ่มต้นเป็นท้องฟ้าสีฟ้าธรรมดา (CC0 จากแพ็ก Screaming Brain Studios — ดู `src/assets/SKY-LICENSE.txt`)
+- **Import Skybox** (ในแผง *3D WORLD · SKYBOX*): `.hdr` (HDRLoader) · `.exr` (EXRLoader) · แพนอรามา 2:1 `.png/.jpg` · cubemap 6 ภาพ (+X −X +Y −Y +Z −Z เลือกพร้อมกัน) — ตรวจเนื้อไฟล์จริง ไม่ใช้ชื่อไฟล์ และตรวจขนาด/อัตราส่วน/เหลี่ยมจัตุรัส/ขนาดเท่ากัน มี Preview ก่อน Apply, Remove, Restore Default และจำท้องฟ้าที่เลือกไว้ (IndexedDB, ไฟล์ไม่ออกเน็ต)
+- Background + PMREM environment (`scene.environment`) แยกกันปรับได้ · แสงหลัก/สีแสงรอบทิศ/ทิศแสงอาทิตย์/สีหมอกคำนวณจากภาพท้องฟ้าที่นำเข้า (ปิดได้ด้วย *Match lighting to sky*)
+- สไลเดอร์: Skybox Brightness, Environment Lighting, Exposure, Contrast, Saturation, Ambient, Shadow Intensity — กระทบแค่การเรนเดอร์ ไม่แตะฟิสิกส์/AI
+
 ## เทคโนโลยี
 - **Three.js** (WebGL2, PBR, real-time shadow map 2048², bias/normalBias ปรับตามขนาดฉาก) · **Rapier** physics (fixed timestep 1/60 s)
 - **Double DQN** เขียนเอง: MLP 17→64→64→14, Experience Replay (50k), ε-greedy, Target Network, Adam, Huber loss, gradient clipping
