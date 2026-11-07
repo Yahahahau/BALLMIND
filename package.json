@@ -1,0 +1,30 @@
+{
+  "name": "ballmind",
+  "version": "0.1.0",
+  "description": "Physics-based reinforcement learning simulator: a ball learns with a DQN, fully in the browser (Three.js + Rapier)",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "typecheck": "tsc",
+    "preview": "vite preview",
+    "test:learn": "tsx scripts/train-headless.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.21.0",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/three": "^0.187.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vite-plugin-singlefile": "^2.3.4"
+  }
+}
