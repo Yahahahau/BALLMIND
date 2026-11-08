@@ -6,6 +6,8 @@ import { deleteModel, deleteReplays, loadModel, loadReplays, loadSettings, saveM
 import { ReplayStore } from '../persist/replayStore';
 import { ObbyPanel } from './obbyPanel';
 import { SkyPanel } from './skyPanel';
+import { MusicPlayer } from '../audio/musicPlayer';
+import { MusicPanel } from './musicPanel';
 import { ReplayViewer } from './replayViewer';
 import { BALL_PALETTES } from '../render/ballStyle';
 import { QualityMode, Viewport } from '../render/viewport';
@@ -76,6 +78,19 @@ export class App {
     });
     this.el.side.appendChild(this.skyPanel.root);
     void this.skyPanel.init(this.settings.sky);
+    const music = new MusicPlayer();
+    music.configure({ ...this.settings.music });
+    (window as unknown as { __music?: MusicPlayer }).__music = music;
+    const mp = new MusicPanel(music, (m) => {
+      this.settings.music = { ...m };
+      void saveSettings(this.settings);
+    });
+    this.el.side.appendChild(mp.root);
+    if (this.settings.music?.playing) {
+      // browsers block autoplay: resume on the first tap/click
+      const go = () => void music.play();
+      window.addEventListener('pointerdown', go, { once: true });
+    }
     (window as unknown as { __ballmind?: App }).__ballmind = this; // handy for debugging / automated tests
     this.viewport.setPalette(this.settings.palette);
     this.viewport.setQuality(this.settings.quality);

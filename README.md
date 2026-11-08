@@ -41,6 +41,9 @@ AI ต้องควบคุมลูกบอลให้ไปสัมผ�
 - Background + PMREM environment (`scene.environment`) แยกกันปรับได้ · แสงหลัก/สีแสงรอบทิศ/ทิศแสงอาทิตย์/สีหมอกคำนวณจากภาพท้องฟ้าที่นำเข้า (ปิดได้ด้วย *Match lighting to sky*)
 - สไลเดอร์: Skybox Brightness, Environment Lighting, Exposure, Contrast, Saturation, Ambient, Shadow Intensity — กระทบแค่การเรนเดอร์ ไม่แตะฟิสิกส์/AI
 
+## เพลงประกอบ
+แผง **MUSIC** เล่น 3 เพลง (Veil44 – Pulse, diedlonely – bipolar, Victoriya – Two Years; ไฟล์เดิมจากผู้ใช้ บีบเป็น 112 kbps ใน `public/music/`) · โหมด **Loop** เล่นวน 1→2→3→1 หรือ **Shuffle** สุ่มภายในสามเพลงนี้ (ไม่ซ้ำเพลงเดิมติดกัน) · เลือกเพลง/ข้าม/เลื่อนเวลา/ปรับเสียง และจำค่าไว้ · เบราว์เซอร์บล็อกเสียงอัตโนมัติ จึงเริ่มเล่นหลังกดปุ่ม Play (ถ้าครั้งก่อนเล่นอยู่ จะต่อให้เมื่อแตะหน้าจอครั้งแรก)
+
 ## เทคโนโลยี
 - **Three.js** (WebGL2, PBR, real-time shadow map 2048², bias/normalBias ปรับตามขนาดฉาก) · **Rapier** physics (fixed timestep 1/60 s)
 - **Double DQN** เขียนเอง: MLP 17→64→64→14, Experience Replay (50k), ε-greedy, Target Network, Adam, Huber loss, gradient clipping

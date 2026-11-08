@@ -59,6 +59,7 @@ export interface Settings {
   speed: number;
   quality: 'auto' | 'high' | 'medium' | 'low';
   palette: number;
+  music?: import('../audio/musicPlayer').MusicSettings;
   sky?: { source: 'default' | 'custom' | 'none'; values: import('../render/skybox').SkySettings };
 }
 
