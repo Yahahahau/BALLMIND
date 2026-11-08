@@ -44,6 +44,11 @@ AI ต้องควบคุมลูกบอลให้ไปสัมผ�
 ## เพลงประกอบ
 แผง **MUSIC** เล่น 3 เพลง (Veil44 – Pulse, diedlonely – bipolar, Victoriya – Two Years; ไฟล์เดิมจากผู้ใช้ บีบเป็น 112 kbps ใน `public/music/`) · โหมด **Loop** เล่นวน 1→2→3→1 หรือ **Shuffle** สุ่มภายในสามเพลงนี้ (ไม่ซ้ำเพลงเดิมติดกัน) · เลือกเพลง/ข้าม/เลื่อนเวลา/ปรับเสียง และจำค่าไว้ · เบราว์เซอร์บล็อกเสียงอัตโนมัติ จึงเริ่มเล่นหลังกดปุ่ม Play (ถ้าครั้งก่อนเล่นอยู่ จะต่อให้เมื่อแตะหน้าจอครั้งแรก)
 
+## Graphics · GTAO (Ambient Occlusion)
+GTAO จริงด้วย `GTAOPass` ของ Three.js: RenderPass (MSAA, half-float) → GTAO + Poisson denoise → OutputPass · ปิดแล้ว dispose composer ทั้งหมดและกลับไปใช้ `renderer.render` เดิม · Shadow map ไม่ถูกแตะ
+- ตั้งค่าในแผง MODEL & DISPLAY: ON/OFF, Quality (Low 8 / Medium 12 / High 20 / Ultra 32 samples + ขนาด buffer + denoiser ต่างกันจริง), Intensity, Radius, Resolution scale, Performance Mode (ครึ่งจำนวน sample, เพดาน ½-res, ไม่มี MSAA), Adaptive resolution (ลดความละเอียด AO อัตโนมัติเมื่อเฟรมช้า), Reset to Default
+- ค่าเริ่มต้น: ON · Medium · Intensity 0.8 · Performance OFF · บันทึกในระบบ settings เดิม · ถ้า GTAO error จะปิดตัวเองและแจ้งข้อความ แล้วเรนเดอร์ต่อแบบปกติ
+
 ## เทคโนโลยี
 - **Three.js** (WebGL2, PBR, real-time shadow map 2048², bias/normalBias ปรับตามขนาดฉาก) · **Rapier** physics (fixed timestep 1/60 s)
 - **Double DQN** เขียนเอง: MLP 17→64→64→14, Experience Replay (50k), ε-greedy, Target Network, Adam, Huber loss, gradient clipping

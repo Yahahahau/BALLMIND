@@ -8,6 +8,8 @@ import { ObbyPanel } from './obbyPanel';
 import { SkyPanel } from './skyPanel';
 import { MusicPlayer } from '../audio/musicPlayer';
 import { MusicPanel } from './musicPanel';
+import { GtaoPanel } from './gtaoPanel';
+import { DEFAULT_GTAO } from '../render/gtao';
 import { ReplayViewer } from './replayViewer';
 import { BALL_PALETTES } from '../render/ballStyle';
 import { QualityMode, Viewport } from '../render/viewport';
@@ -72,6 +74,13 @@ export class App {
     Object.assign(this.settings, await loadSettings());
     this.buildShell();
     this.viewport = new Viewport(this.el.viewport);
+    this.viewport.gtao.settings = { ...DEFAULT_GTAO, ...this.settings.gtao };
+    this.viewport.gtao.sync();
+    const gp = new GtaoPanel(this.viewport.gtao, (g) => {
+      this.settings.gtao = g;
+      void saveSettings(this.settings);
+    });
+    this.el.qualSeg.closest('section')!.appendChild(gp.root);
     this.skyPanel = new SkyPanel(this.viewport.sky, (source, values) => {
       this.settings.sky = { source, values };
       void saveSettings(this.settings);

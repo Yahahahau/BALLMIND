@@ -59,6 +59,7 @@ export interface Settings {
   speed: number;
   quality: 'auto' | 'high' | 'medium' | 'low';
   palette: number;
+  gtao?: import('../render/gtao').GtaoSettings;
   music?: import('../audio/musicPlayer').MusicSettings;
   sky?: { source: 'default' | 'custom' | 'none'; values: import('../render/skybox').SkySettings };
 }

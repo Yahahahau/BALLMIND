@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { SkyboxManager } from './skybox';
+import { GtaoPipeline } from './gtao';
 import type { EnvSnapshot } from '../core/task/types';
 import { BALL_PALETTES, createCheckerTexture, createGridTexture } from './ballStyle';
 import { CameraController } from './cameraController';
@@ -25,6 +26,7 @@ export class Viewport {
 
   private readonly light: THREE.DirectionalLight;
   readonly sky: SkyboxManager;
+  readonly gtao: GtaoPipeline;
   private hemi: THREE.HemisphereLight;
   private lightDir = new THREE.Vector3(7, 12, 5).normalize();
   private fogNear = 28;
@@ -76,6 +78,7 @@ export class Viewport {
 
     // Sky + image-based light live in SkyboxManager (default blue sky, import, fallback environment).
     this.sky = new SkyboxManager(this.renderer, this.scene);
+    this.gtao = new GtaoPipeline(this.renderer, this.scene, this.camera);
     this.scene.fog = new THREE.Fog(this.sky.flatColor, 28, 62);
     this.hemi = new THREE.HemisphereLight(0xdfe9ff, 0x3b3a40, 0.32);
     this.scene.add(this.hemi);
@@ -440,6 +443,7 @@ export class Viewport {
     // Keep the whole arena in view in portrait layouts.
     this.camera.fov = w / h < 1 ? 56 : 42;
     this.camera.updateProjectionMatrix();
+    this.gtao.resize();
   }
 
   start(): void {
@@ -473,9 +477,11 @@ export class Viewport {
         this.targetMat.emissiveIntensity = 0.12 + this.flash * 1.6;
       }
     }
-    this.renderer.render(this.scene, this.camera);
+    if (this.gtao.active) this.gtao.render();
+    else this.renderer.render(this.scene, this.camera);
 
     this.autoAdapt(now, dtMs);
+    this.gtao.adapt(now, this.frameEma);
     this.fpsFrames++;
     if (now - this.fpsStart >= 500) {
       this.onFps((this.fpsFrames * 1000) / (now - this.fpsStart), this.tier);
