@@ -55,3 +55,25 @@ export function buildObservation(out: Float32Array, s: ReachState): void {
   out[15] = outside ? 1 : 0;
   out[16] = clamp(Math.hypot(s.vx, s.vz) / C.vMax);
 }
+
+/**
+ * Vision-mode observation: ONLY the ball's own physics sensors (proprioception). No target
+ * position, no ball position, no distances – the AI has to get those from its camera image.
+ *  0-2 linear velocity (x,y,z)   3-5 angular velocity   6 touching ground   7 speed
+ */
+export const PROPRIO_SIZE = 8;
+
+export function buildProprioception(
+  out: Float32Array,
+  s: ReachState,
+  angVel: { x: number; y: number; z: number },
+): void {
+  out[0] = clamp(s.vx / C.vMax);
+  out[1] = clamp(s.vy / 8);
+  out[2] = clamp(s.vz / C.vMax);
+  out[3] = clamp(angVel.x / 20);
+  out[4] = clamp(angVel.y / 20);
+  out[5] = clamp(angVel.z / 20);
+  out[6] = s.grounded ? 1 : 0;
+  out[7] = clamp(Math.hypot(s.vx, s.vz) / C.vMax);
+}

@@ -1,6 +1,7 @@
 import { DenseNetwork } from '../nn/dense';
 import { ReplayBuffer, ReplayDump } from './replayBuffer';
 import { Rng } from '../math/rng';
+import type { Learner } from './learner';
 
 export interface DQNConfig {
   hidden: number[];
@@ -52,7 +53,7 @@ export interface AgentState {
  * Double DQN with experience replay, epsilon-greedy exploration, a periodically
  * synchronised target network and an Adam optimiser.
  */
-export class DQNAgent {
+export class DQNAgent implements Learner {
   readonly obsDim: number;
   readonly actionCount: number;
   config: DQNConfig;
@@ -103,6 +104,14 @@ export class DQNAgent {
     this.bDone = new Float32Array(B);
     this.bNextAct = new Int32Array(B);
     this.dOut = new Float32Array(B * actionCount);
+  }
+
+  get paramCount(): number {
+    return this.online.params.length;
+  }
+
+  arch(): string {
+    return JSON.stringify(this.config.hidden);
   }
 
   get epsilon(): number {

@@ -49,6 +49,29 @@ GTAO จริงด้วย `GTAOPass` ของ Three.js: RenderPass (MSAA, h
 - ตั้งค่าในแผง MODEL & DISPLAY: ON/OFF, Quality (Low 8 / Medium 12 / High 20 / Ultra 32 samples + ขนาด buffer + denoiser ต่างกันจริง), Intensity, Radius, Resolution scale, Performance Mode (ครึ่งจำนวน sample, เพดาน ½-res, ไม่มี MSAA), Adaptive resolution (ลดความละเอียด AO อัตโนมัติเมื่อเฟรมช้า), Reset to Default
 - ค่าเริ่มต้น: ON · Medium · Intensity 0.8 · Performance OFF · บันทึกในระบบ settings เดิม · ถ้า GTAO error จะปิดตัวเองและแจ้งข้อความ แล้วเรนเดอร์ต่อแบบปกติ
 
+## AI Vision · ภารกิจ "REACH THE SQUARE · VISION"
+
+ลูกบอลมองโลกผ่าน **กล้องของ AI เอง** (แยกจากกล้องผู้เล่นโดยสิ้นเชิง) แล้วเรียนรู้ด้วย CNN ที่เทรนจากผลลัพธ์ฟิสิกส์จริงของ Rapier:
+
+```
+AI Camera → RGB Image (stack 2 เฟรม) → CNN Visual Encoder → Visual Features ┐
+Physics sensors (ความเร็ว, ความเร็วเชิงมุม, แตะพื้น) ─────────────────────────┴→ Dense → Q-values → Action → Rapier
+```
+
+- **กล้อง AI**: เรนเดอร์ geometry จริงของฉาก (พื้น, เป้า, ลูกบอล) ด้วย WebGL2 บน `OffscreenCanvas` *ใน worker* ลงเป้า 40×40 RGB (ปรับ 16–64) มุมกล้องเกาะตามตำแหน่งบอล (ไม่หมุนตามบอล) ปรับ FOV / pitch / ทิศ / ระยะ ได้ในแผง **AI VISION**; ภาพที่ AI เห็น **ซ่อนเป็นค่าเริ่มต้น** (กดเปิดเพื่อดูภาพจริงที่ส่งเข้าเน็ตเวิร์ก ~5 Hz และจะไม่ถูกส่งจาก worker ถ้าไม่เปิด)
+- **ไม่มีพิกัด**: observation ของโหมดนี้มีแค่ 8 ค่าจากเซ็นเซอร์ของตัวบอล (ความเร็ว 3, ความเร็วเชิงมุม 3, แตะพื้น, speed) – ไม่มีตำแหน่งเป้า ตำแหน่งบอล หรือระยะทางให้ AI ต้อง "เห็น" เป้าจากภาพ (ส่วน *reward* ยังคำนวณจากฟิสิกส์จริงเหมือนโหมดปกติ)
+- **เฉพาะ perception**: ภาพเป็นสีเรียบ unlit – ไม่มีเงา, GTAO, skybox หรือแสง ดังนั้นการตั้งค่ากราฟิกของผู้เล่นไม่กระทบสิ่งที่ AI เห็น
+- **CNN เขียนเอง** (`src/core/vision/visionNet.ts`): conv4×4/2(8) → conv3×3/2(16) → conv3×3/1(16) → dense 64 (visual features) → ต่อกับ physics sensors → dense 64 → Q ; backprop เขียนเอง ผ่าน gradient check (`npx tsx scripts/test-visionnet.ts`) ~60k พารามิเตอร์ ~0.54M MAC/forward
+- **Temporal-ready**: stack เฟรมก่อนหน้า (ค่าเริ่มต้น 2) – เปลี่ยน dense head เป็น GRU ได้ภายหลังโดยไม่แตะส่วนอื่น
+- **Replay เก็บเฟรม uint8 ครั้งเดียว** ใน frame pool (transition เก็บเฉพาะ id) – 12,000 transitions ≈ 40 MB ; replay ของ vision ไม่ถูกบันทึกลง IndexedDB (น้ำหนักเน็ต/ความคืบหน้าบันทึกตามปกติ)
+- **Fallback**: ถ้า worker ไม่มี OffscreenCanvas/WebGL2 จะใช้กล้อง CPU ที่คำนวณด้วยโมเดลกล้องเดียวกัน (ช้ากว่า, แสดงข้อความในแผง) ทรัพยากร GPU (render target, geometry, context) ถูก dispose เมื่อเปลี่ยนภารกิจ/ตั้งค่า
+- ทดสอบ: `npx tsx scripts/test-vision.ts` (pipeline) · `npx tsx scripts/vision-learn.ts 32000 40` (เทรนจริง)
+
+### ผลเทรนจริง (headless, กล้อง CPU ตัวอ้างอิง, ไม่มีสคริปต์ช่วย)
+
+เทรนจากภาพล้วน + เซ็นเซอร์ 32,000 decision (~16 นาที บน CPU Node): success rate (50 ตอนล่าสุด) **~10–17% ขณะสุ่ม → ~90%** เมื่อ ε ลดเหลือ 0.08 ; โหมด Demo (greedy ไม่สำรวจ) 184 ตอน **สำเร็จ 90%** ผลนี้มาจากเน็ตเวิร์กที่เห็นภาพเท่านั้น (ไม่มีพิกัด)
+ข้อจำกัดที่ยังไม่ได้ยืนยัน: ยังไม่ได้วัดความเร็วบน iPad จริง ; ในเบราว์เซอร์ SwiftShader (GL ซอฟต์แวร์) การอ่านพิกเซลจาก worker ช้ามากเมื่อฉากหลักเรนเดอร์พร้อมกัน (ไม่ใช่ตัวแทนของ GPU จริง) ; vision สำหรับ Obby ยังไม่ได้ทำ (ภารกิจ Obby ยังใช้ observation แบบเดิม)
+
 ## เทคโนโลยี
 - **Three.js** (WebGL2, PBR, real-time shadow map 2048², bias/normalBias ปรับตามขนาดฉาก) · **Rapier** physics (fixed timestep 1/60 s)
 - **Double DQN** เขียนเอง: MLP 17→64→64→14, Experience Replay (50k), ε-greedy, Target Network, Adam, Huber loss, gradient clipping

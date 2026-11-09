@@ -4,6 +4,9 @@
  */
 import { getTask } from '../core/tasks/registry';
 import { TrainingManager } from '../core/training/trainingManager';
+import { createVisionRig } from './gpuVisionRig';
+import { sanitizeVision } from '../core/vision/config';
+import type { VisionRig } from '../core/vision/rig';
 import type { FromWorker, ToWorker } from './protocol';
 
 interface WorkerScope {
@@ -19,6 +22,10 @@ const BUDGET_MS = 11;
 let mgr: TrainingManager | null = null;
 let last = 0;
 let sentOnce = false;
+let rig: VisionRig | null = null;
+let timer: ReturnType<typeof setInterval> | null = null;
+let previewOn = false;
+let lastPreview = 0;
 
 function post(msg: FromWorker, transfer?: Transferable[]): void {
   ctx.postMessage(msg, transfer);
@@ -34,6 +41,11 @@ function frame(): void {
   const traces = mgr.drainTraces();
   const notices = mgr.drainNotices();
   const loss = mgr.drainLoss();
+  if (previewOn && mgr.vision && t - lastPreview > 200) {
+    lastPreview = t;
+    const rgb = mgr.vision.frame.slice();
+    post({ type: 'visionFrame', size: mgr.vision.agent.vision.size, rgb }, [rgb.buffer]);
+  }
   if (mgr.dirty || episodes.length || traces.length || !sentOnce) {
     sentOnce = true;
     mgr.dirty = false;
@@ -56,7 +68,21 @@ ctx.onmessage = async (e) => {
   try {
     if (m.type === 'init') {
       mgr?.env.dispose();
-      mgr = await TrainingManager.create(getTask(m.taskId), m.seed);
+      rig?.dispose();
+      rig = null;
+      previewOn = false;
+      sentOnce = false;
+      const task = getTask(m.taskId);
+      let note: string | undefined;
+      let vopt: { rig: VisionRig; settings: ReturnType<typeof sanitizeVision> } | undefined;
+      if (task.vision) {
+        const settings = sanitizeVision(m.vision, sanitizeVision(task.vision.defaults));
+        const made = createVisionRig(settings);
+        rig = made.rig;
+        note = made.note;
+        vopt = { rig, settings };
+      }
+      mgr = await TrainingManager.create(task, m.seed, {}, vopt);
       let restored = false;
       if (m.model) {
         try {
@@ -67,8 +93,13 @@ ctx.onmessage = async (e) => {
         }
       }
       last = performance.now();
+      if (mgr.vision && vopt) {
+        const net = mgr.vision.agent.online;
+        post({ type: 'visionInfo', settings: mgr.vision.agent.vision, kind: mgr.vision.rig.kind, note, params: net.params.length, macs: net.macs });
+      }
       post({ type: 'ready', info: mgr.task.info, stats: mgr.stats(), history: mgr.fullHistory(), loss: mgr.fullLoss(), restored });
-      setInterval(frame, TICK_MS);
+      if (timer) clearInterval(timer);
+      timer = setInterval(frame, TICK_MS);
       return;
     }
     if (!mgr) return;
@@ -108,6 +139,9 @@ ctx.onmessage = async (e) => {
       }
       case 'export':
         post({ type: 'exported', model: mgr.exportModel() });
+        break;
+      case 'visionPreview':
+        previewOn = m.on;
         break;
       case 'load':
         mgr.importModel(m.model);

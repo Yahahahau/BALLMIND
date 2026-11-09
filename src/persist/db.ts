@@ -61,6 +61,7 @@ export interface Settings {
   palette: number;
   gtao?: import('../render/gtao').GtaoSettings;
   music?: import('../audio/musicPlayer').MusicSettings;
+  vision?: import('../core/vision/config').VisionSettings;
   sky?: { source: 'default' | 'custom' | 'none'; values: import('../render/skybox').SkySettings };
 }
 

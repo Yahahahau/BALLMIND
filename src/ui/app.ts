@@ -9,6 +9,7 @@ import { SkyPanel } from './skyPanel';
 import { MusicPlayer } from '../audio/musicPlayer';
 import { MusicPanel } from './musicPanel';
 import { GtaoPanel } from './gtaoPanel';
+import { VisionPanel } from './visionPanel';
 import { DEFAULT_GTAO } from '../render/gtao';
 import { ReplayViewer } from './replayViewer';
 import { BALL_PALETTES } from '../render/ballStyle';
@@ -65,6 +66,7 @@ export class App {
   private replayViewer: ReplayViewer | null = null;
   private resumeAfterReplay = false;
   private isObby = false;
+  private visionPanel: VisionPanel | null = null;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -87,6 +89,17 @@ export class App {
     });
     this.el.side.appendChild(this.skyPanel.root);
     void this.skyPanel.init(this.settings.sky);
+    this.visionPanel = new VisionPanel(
+      (m) => this.sim?.send(m),
+      (v) => {
+        this.settings.vision = v;
+        void saveSettings(this.settings);
+      },
+      () => {
+        if (this.task) void this.startTask(this.task);
+      },
+    );
+    this.el.side.appendChild(this.visionPanel.root);
     const music = new MusicPlayer();
     music.configure({ ...this.settings.music });
     (window as unknown as { __music?: MusicPlayer }).__music = music;
@@ -261,6 +274,7 @@ export class App {
     if (this.isObby) this.viewport.buildObby();
     else this.viewport.buildTask(info.geometry);
     this.obbyPanel?.clear();
+    this.visionPanel?.setTask(!!info.vision, this.settings.vision);
     this.replays.clear();
     if (this.isObby) this.replays.set(await loadReplays(info.id));
     this.sim?.terminate();
@@ -274,7 +288,7 @@ export class App {
     const sim = new SimClient();
     this.sim = sim;
     sim.onMessage = (m) => this.onWorker(m);
-    sim.send({ type: 'init', taskId: info.id, seed: (Date.now() & 0xffff) + 1, model: saved });
+    sim.send({ type: 'init', taskId: info.id, seed: (Date.now() & 0xffff) + 1, model: saved, vision: info.vision ? this.settings.vision : undefined });
     sim.send({ type: 'speed', value: this.settings.speed });
     this.saveTimer = window.setInterval(() => {
       if (this.runState === 'running' && !this.demo) this.requestSave('auto');
@@ -298,6 +312,12 @@ export class App {
         this.lastSuccesses = m.stats.successes;
         this.renderStats(true);
         if (m.restored) toast(`Restored AI: ${m.stats.episodesDone} episodes · ${m.stats.trainSteps} training steps`);
+        break;
+      case 'visionInfo':
+        this.visionPanel?.onInfo(m);
+        break;
+      case 'visionFrame':
+        this.visionPanel?.onFrame(m.size, m.rgb);
         break;
       case 'frame': {
         this.viewport.setSnapshot(m.snap);

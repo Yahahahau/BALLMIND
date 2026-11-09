@@ -39,6 +39,8 @@ export interface TaskInfo {
   actionLabels: string[];
   /** Task-specific geometry the renderer needs (arena size, target size…). */
   geometry: Record<string, number>;
+  /** Vision task: the AI sees camera images instead of coordinates. */
+  vision?: { scene: string; proprioSize: number; defaults?: Partial<import('../vision/config').VisionSettings> };
 }
 
 /** Optional per-episode details a task can report (used for per-stage statistics). */
@@ -105,5 +107,7 @@ export interface TaskDefinition {
   info: TaskInfo;
   /** Task-specific DQN overrides (network size, buffer, update ratio…). */
   dqn?: Partial<import('../rl/dqn').DQNConfig>;
+  /** Set for tasks where the AI perceives the world through its camera. */
+  vision?: import('../vision/config').VisionTaskSpec;
   createEnvironment(seed: number): Promise<Environment>;
 }

@@ -1,9 +1,10 @@
 import type { EnvSnapshot, TaskInfo, TaskNotice } from '../core/task/types';
+import type { VisionSettings } from '../core/vision/config';
 import type { EpisodeRecord, ModelBlob, ReplayRecord, TrainingStats } from '../core/training/model';
 
 /** Main thread -> simulation worker. */
 export type ToWorker =
-  | { type: 'init'; taskId: string; seed: number; model?: ModelBlob }
+  | { type: 'init'; taskId: string; seed: number; model?: ModelBlob; vision?: Partial<VisionSettings> }
   | { type: 'start' }
   | { type: 'pause' }
   | { type: 'resume' }
@@ -15,7 +16,9 @@ export type ToWorker =
   | { type: 'demo'; on: boolean }
   | { type: 'save'; reason: string }
   | { type: 'export' }
-  | { type: 'load'; model: ModelBlob };
+  | { type: 'load'; model: ModelBlob }
+  /** Stream the AI camera image to the UI (off by default; ~5 Hz). */
+  | { type: 'visionPreview'; on: boolean };
 
 export type RunStateName = 'idle' | 'running' | 'paused';
 
@@ -37,4 +40,6 @@ export type FromWorker =
   | { type: 'exported'; model: ModelBlob }
   | { type: 'loaded'; stats: TrainingStats; history: EpisodeRecord[]; loss: number[] }
   | { type: 'reset-ai'; stats: TrainingStats }
+  | { type: 'visionFrame'; size: number; rgb: Uint8Array }
+  | { type: 'visionInfo'; settings: VisionSettings; kind: string; note?: string; params: number; macs: number }
   | { type: 'error'; message: string };

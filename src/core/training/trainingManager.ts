@@ -1,4 +1,8 @@
 import { DEFAULT_DQN_CONFIG, DQNAgent, DQNConfig } from '../rl/dqn';
+import type { Learner } from '../rl/learner';
+import { VisionDQNAgent } from '../vision/visionAgent';
+import type { VisionRig } from '../vision/rig';
+import { sanitizeVision, type VisionSettings } from '../vision/config';
 import type { Environment, EnvSnapshot, TaskDefinition, TaskNotice } from '../task/types';
 import { MODEL_VERSION } from './model';
 import { FIXED_DT } from '../physics/physicsWorld';
@@ -23,7 +27,9 @@ const SUCCESS_SCORE = 100;
 export class TrainingManager {
   readonly task: TaskDefinition;
   readonly env: Environment;
-  readonly agent: DQNAgent;
+  readonly agent: Learner;
+  /** Present for vision tasks: the AI camera + the multimodal agent. */
+  readonly vision: { rig: VisionRig; agent: VisionDQNAgent; frame: Uint8Array; renderMs: number } | null = null;
   state: RunState = 'idle';
   speed = 4;
   demo = false;
@@ -57,20 +63,40 @@ export class TrainingManager {
   dirty = true;
   private cachedStats: Partial<TrainingStats> = { avgReward: 0, successRate: 0, avgCompletionTime: 0 };
 
-  private constructor(task: TaskDefinition, env: Environment, agent: DQNAgent, seed: number) {
+  private constructor(task: TaskDefinition, env: Environment, agent: Learner, seed: number, rig?: VisionRig) {
     this.task = task;
     this.env = env;
     this.agent = agent;
+    if (rig && agent instanceof VisionDQNAgent) {
+      const n = 3 * agent.vision.size * agent.vision.size;
+      this.vision = { rig, agent, frame: new Uint8Array(n), renderMs: 0 };
+    }
     this.seed = seed;
     this.obs = new Float32Array(env.observationSize);
     this.nextObs = new Float32Array(env.observationSize);
     this.beginEpisode();
   }
 
-  static async create(task: TaskDefinition, seed = 1, config: Partial<DQNConfig> = {}): Promise<TrainingManager> {
+  /**
+   * `vision`: supply an AI-camera rig (and optionally settings) for vision tasks. Without a rig a vision
+   * task cannot run – the caller must provide one (GPU in the worker, CPU reference in Node tests).
+   */
+  static async create(
+    task: TaskDefinition,
+    seed = 1,
+    config: Partial<DQNConfig> = {},
+    vision?: { rig: VisionRig; settings?: Partial<VisionSettings> },
+  ): Promise<TrainingManager> {
     const env = await task.createEnvironment(seed);
-    const agent = new DQNAgent(env.observationSize, env.actionSet.size, { ...task.dqn, ...config }, seed);
-    return new TrainingManager(task, env, agent, seed);
+    const cfg = { ...task.dqn, ...config };
+    if (task.vision) {
+      if (!vision) throw new Error('This task needs the AI vision camera, but no vision renderer is available');
+      const settings = sanitizeVision(vision.settings, sanitizeVision(task.vision.defaults));
+      vision.rig.configure(settings);
+      const agent = new VisionDQNAgent(env.observationSize, env.actionSet.size, settings, cfg, seed);
+      return new TrainingManager(task, env, agent, seed, vision.rig);
+    }
+    return new TrainingManager(task, env, new DQNAgent(env.observationSize, env.actionSet.size, cfg, seed), seed);
   }
 
   // ---------------- controls ----------------
@@ -141,10 +167,22 @@ export class TrainingManager {
 
   private beginEpisode(): void {
     this.obs.set(this.env.reset());
+    if (this.vision) {
+      this.look();
+      this.vision.agent.beginEpisode(this.vision.frame);
+    }
     this.sub = 0;
     this.decision = 0;
     this.epReward = 0;
     this.action = this.chooseAction();
+  }
+
+  /** Render what the AI camera sees right now into `vision.frame`. */
+  private look(): void {
+    const v = this.vision!;
+    const t = now();
+    v.rig.render(this.env.snapshot(), v.frame);
+    v.renderMs = v.renderMs === 0 ? now() - t : v.renderMs * 0.95 + (now() - t) * 0.05;
   }
 
   private chooseAction(): number {
@@ -204,6 +242,10 @@ export class TrainingManager {
 
     const r = this.env.evaluate(this.decision);
     this.nextObs.set(r.obs);
+    if (this.vision) {
+      this.look();
+      this.vision.agent.pushNext(this.vision.frame);
+    }
     this.epReward += r.reward;
     this.decision++;
 
@@ -232,6 +274,7 @@ export class TrainingManager {
       const t = this.obs;
       this.obs = this.nextObs;
       this.nextObs = t;
+      this.vision?.agent.advance();
       this.action = this.chooseAction();
     }
     return true;
@@ -395,6 +438,15 @@ export class TrainingManager {
       epsilon: this.demo ? 0 : this.agent.epsilon,
       loss: this.agent.lastLoss,
       bufferSize: this.agent.replay.size,
+      vision: this.vision
+        ? {
+            size: this.vision.agent.vision.size,
+            stack: this.vision.agent.vision.stack,
+            params: this.vision.agent.paramCount,
+            renderMs: this.vision.renderMs,
+            kind: this.vision.rig.kind,
+          }
+        : undefined,
       demo: this.demo,
       demoEpisodes: this.demoEpisodes,
       demoSuccessRate: this.demoEpisodes ? this.demoSuccesses / this.demoEpisodes : 0,
@@ -469,6 +521,7 @@ export class TrainingManager {
       lossHistory: Float32Array.from(this.lossHist),
       stageTotals: this.stageTotals.map((t) => ({ ...t })),
       taskState: this.env.exportState?.(),
+      arch: this.agent.arch(),
       replay: withReplay ? this.agent.replay.dump() : undefined,
       savedAt: Date.now(),
     };
@@ -482,9 +535,9 @@ export class TrainingManager {
         `Model shape ${m.obsSize}→${m.actionCount} does not match this task (${this.env.observationSize}→${this.env.actionSet.size})`,
       );
     const cfg = { ...DEFAULT_DQN_CONFIG, ...m.config };
-    if (JSON.stringify(cfg.hidden) !== JSON.stringify(this.agent.config.hidden))
-      throw new Error('Model network architecture does not match');
-    const n = this.agent.online.params.length;
+    if (m.arch !== undefined ? m.arch !== this.agent.arch() : JSON.stringify(cfg.hidden) !== this.agent.arch())
+      throw new Error('Model network architecture does not match (for vision models: image size, frame stack and encoder must match)');
+    const n = this.agent.paramCount;
     if (m.online.length !== n || m.target.length !== n || m.adamM.length !== n || m.adamV.length !== n)
       throw new Error('Model weight count does not match this network');
     this.agent.config = cfg;

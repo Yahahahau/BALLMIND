@@ -16,7 +16,7 @@ for (const id of ['reach-square', 'obby-challenge']) {
   const b = await TrainingManager.create(getTask(id), 9, { minReplay: 300 });
   b.importModel({ ...back, replay: blob.replay });
   ok(b.stats().episodesDone === s.episodesDone && b.agent.replay.size === a.agent.replay.size, `${id}: import restores counters+buffer`);
-  ok(Math.abs(b.agent.online.params[5] - a.agent.online.params[5]) < 1e-9, `${id}: weights equal`);
+  ok(Math.abs(b.exportModel().online[5] - a.exportModel().online[5]) < 1e-9, `${id}: weights equal`);
   if (id !== 'reach-square') {
     ok((s.extra?.stages as unknown[]).length === 5, 'obby: 5 per-stage stats');
     ok(a.drainTraces().length > 0, 'obby: traces emitted');

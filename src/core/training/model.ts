@@ -66,6 +66,8 @@ export interface ModelBlob {
   stageTotals?: StageTotals[];
   /** Task-specific state (curriculum, start mode…). */
   taskState?: unknown;
+  /** Network architecture fingerprint (absent in older files). */
+  arch?: string;
   /** Present in IndexedDB saves, omitted from exported files. */
   replay?: ReplayDump;
   savedAt: number;
@@ -106,6 +108,8 @@ export interface TrainingStats {
   demoSuccessRate: number;
   /** Task-specific live values (Obby: stage, checkpoint, progress, curriculum…) and per-stage stats. */
   extra?: Record<string, unknown> & { stages?: StageStats[] };
+  /** Present for vision tasks. */
+  vision?: { size: number; stack: number; params: number; renderMs: number; kind: string };
 }
 
 /** One recorded episode for the Training Replay viewer. */
@@ -179,6 +183,7 @@ export function modelToJson(m: ModelBlob): string {
     stageTotals: m.stageTotals,
     taskState: m.taskState,
     savedAt: m.savedAt,
+    arch: m.arch,
   });
 }
 
@@ -223,5 +228,6 @@ export function modelFromJson(text: string): ModelBlob {
     stageTotals: j.stageTotals,
     taskState: j.taskState,
     savedAt: j.savedAt,
+    arch: typeof j.arch === 'string' ? j.arch : undefined,
   };
 }

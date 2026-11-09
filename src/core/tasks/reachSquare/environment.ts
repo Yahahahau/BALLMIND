@@ -4,12 +4,12 @@ import { Rng } from '../../math/rng';
 import { initPhysics, PhysicsWorld, RAPIER } from '../../physics/physicsWorld';
 import type { BodyPose, Environment, EnvSnapshot, StepResult } from '../../task/types';
 import { REACH_CONFIG as C } from './config';
-import { buildObservation, OBSERVATION_SIZE, ReachState } from './observation';
+import { buildObservation, buildProprioception, OBSERVATION_SIZE, PROPRIO_SIZE, ReachState } from './observation';
 import { computeReward } from './reward';
 
 /** REACH THE SQUARE: touch the target tile on the floor without falling off. */
 export class ReachSquareEnvironment implements Environment {
-  readonly observationSize = OBSERVATION_SIZE;
+  readonly observationSize: number;
   readonly actionSet = createLocomotionActions();
   readonly substepsPerDecision = C.substepsPerDecision;
   readonly maxDecisions = C.maxDecisions;
@@ -19,14 +19,17 @@ export class ReachSquareEnvironment implements Environment {
   private readonly targetBody: RAPIER.RigidBody;
   private readonly targetCollider: RAPIER.Collider;
   private readonly rng: Rng;
-  private readonly obs = new Float32Array(OBSERVATION_SIZE);
+  private readonly obs: Float32Array;
   private readonly state: ReachState = { px: 0, py: 0, pz: 0, vx: 0, vy: 0, vz: 0, tx: 0, tz: 0, grounded: false };
   private target: [number, number] = [0, 0];
   private prevDist = 0;
   private epoch = 0;
   private lastActionJumped = false;
 
-  constructor(seed: number) {
+  /** `vision`: observation = physics sensors only (no coordinates); the target is found through the camera. */
+  constructor(seed: number, private readonly vision = false) {
+    this.observationSize = vision ? PROPRIO_SIZE : OBSERVATION_SIZE;
+    this.obs = new Float32Array(this.observationSize);
     this.rng = new Rng(seed * 104729 + 7);
     this.physics = new PhysicsWorld(-9.81);
     const t = C.floorThickness / 2;
@@ -54,7 +57,7 @@ export class ReachSquareEnvironment implements Environment {
     this.lastActionJumped = false;
     this.readState();
     this.prevDist = Math.hypot(this.state.tx - this.state.px, this.state.tz - this.state.pz);
-    buildObservation(this.obs, this.state);
+    this.observe();
     return this.obs;
   }
 
@@ -63,6 +66,11 @@ export class ReachSquareEnvironment implements Environment {
     this.ball.applyAction(def, firstSubstep);
     if (firstSubstep) this.lastActionJumped = def.jump;
     this.physics.step();
+  }
+
+  private observe(): void {
+    if (this.vision) buildProprioception(this.obs, this.state, this.ball.body.angvel());
+    else buildObservation(this.obs, this.state);
   }
 
   private readState(): void {
@@ -96,7 +104,7 @@ export class ReachSquareEnvironment implements Environment {
       jumped: this.lastActionJumped,
     });
     this.prevDist = dist;
-    buildObservation(this.obs, s);
+    this.observe();
     const terminal = success || fell;
     return { reward, done: terminal || timeout, terminal, success, failed: fell, obs: this.obs };
   }
@@ -122,4 +130,9 @@ export class ReachSquareEnvironment implements Environment {
 export async function createReachSquareEnvironment(seed: number): Promise<Environment> {
   await initPhysics();
   return new ReachSquareEnvironment(seed);
+}
+
+export async function createReachVisionEnvironment(seed: number): Promise<Environment> {
+  await initPhysics();
+  return new ReachSquareEnvironment(seed, true);
 }
