@@ -275,6 +275,7 @@ export class App {
     else this.viewport.buildTask(info.geometry);
     this.obbyPanel?.clear();
     this.visionPanel?.setTask(!!info.vision, this.settings.vision);
+    this.viewport.setGaze(null);
     this.replays.clear();
     if (this.isObby) this.replays.set(await loadReplays(info.id));
     this.sim?.terminate();
@@ -314,6 +315,7 @@ export class App {
         if (m.restored) toast(`Restored AI: ${m.stats.episodesDone} episodes · ${m.stats.trainSteps} training steps`);
         break;
       case 'visionInfo':
+        this.viewport.setGaze(m.settings);
         this.visionPanel?.onInfo(m);
         break;
       case 'visionFrame':

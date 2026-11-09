@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { SkyboxManager } from './skybox';
 import { GtaoPipeline } from './gtao';
 import type { EnvSnapshot } from '../core/task/types';
+import { BallEyes } from './ballEyes';
+import { visionCameraPose } from '../core/vision/camera';
+import type { VisionSettings } from '../core/vision/config';
 import { BALL_PALETTES, createCheckerTexture, createGridTexture } from './ballStyle';
 import { CameraController } from './cameraController';
 import { ObbyScene } from './obbyScene';
@@ -33,6 +36,9 @@ export class Viewport {
   private fogFar = 62;
   private overviewOn = false;
   private ball!: THREE.Mesh;
+  private eyes: BallEyes | null = null;
+  private gazeVec: THREE.Vector3 | null = null;
+  private gazeYaw = 0;
   private ballMat!: THREE.MeshPhysicalMaterial;
   private targetGroup = new THREE.Group();
   private targetMat!: THREE.MeshStandardMaterial;
@@ -179,6 +185,7 @@ export class Viewport {
     this.ball.position.set(g.startX, g.ballRadius, g.startZ);
     this.snapPos.copy(this.ball.position);
     this.world.add(this.ball);
+    this.addEyes(g.ballRadius);
     this.epoch = -1;
   }
 
@@ -240,6 +247,30 @@ export class Viewport {
     this.ball = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 36), this.ballMat);
     this.ball.castShadow = true;
     this.world.add(this.ball);
+    this.addEyes(radius);
+  }
+
+  private addEyes(radius: number): void {
+    this.eyes?.dispose();
+    this.eyes = new BallEyes(radius);
+    this.eyes.group.position.copy(this.ball.position);
+    this.world.add(this.eyes.group);
+  }
+
+  /**
+   * Gaze of the AI ball's eyes = the forward vector of the real AI vision camera (same pose function
+   * the worker renders with). `null` for tasks without an AI camera: eyes look straight ahead.
+   */
+  setGaze(v: VisionSettings | null): void {
+    if (!v) {
+      this.gazeVec = null;
+      return;
+    }
+    const f = visionCameraPose(v, 0, 0, 0).fwd;
+    this.gazeVec = new THREE.Vector3(f[0], f[1], f[2]);
+    // idle facing: the camera's heading when it looks ahead; when it looks (almost) straight down its heading
+    // carries no meaning, so the face starts turned toward +Z (toward the default player view)
+    this.gazeYaw = v.pitch >= 80 ? 0 : Math.atan2(Math.sin((v.yaw * Math.PI) / 180), -Math.cos((v.yaw * Math.PI) / 180));
   }
 
   private resetWorld(): void {
@@ -462,6 +493,7 @@ export class Viewport {
       if (!Number.isFinite(this.ball.position.x + this.ball.position.y + this.ball.position.z)) this.ball.position.copy(this.snapPos);
       this.ball.position.lerp(this.snapPos, k);
       this.ball.quaternion.slerp(this.snapQuat, k);
+      this.eyes?.update(dt, this.ball.position, this.gazeVec, this.gazeYaw);
       if (this.obbyBall) {
         // shadow light follows the ball so a small, sharp shadow map covers the action
         const bp = this.ball.position;
