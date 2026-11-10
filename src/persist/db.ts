@@ -62,6 +62,7 @@ export interface Settings {
   gtao?: import('../render/gtao').GtaoSettings;
   music?: import('../audio/musicPlayer').MusicSettings;
   vision?: import('../core/vision/config').VisionSettings;
+  visionFp?: import('../core/vision/config').VisionSettings;
   sky?: { source: 'default' | 'custom' | 'none'; values: import('../render/skybox').SkySettings };
 }
 
@@ -95,4 +96,36 @@ export async function loadSky(): Promise<import('../render/skybox').StoredSky | 
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Before the first-person Vision Agent V2 exists in a browser profile, copy every legacy saved model (and replay
+ * set) to a separate `backup:v1:*` key. Never overwrites an existing backup, never touches the originals.
+ */
+export async function backupLegacyModels(): Promise<{ backedUp: string[]; existing: string[] }> {
+  const res = { backedUp: [] as string[], existing: [] as string[] };
+  for (const id of ['reach-square', 'reach-vision', 'obby-challenge']) {
+    const m = await get<ModelBlob>(modelKey(id)).catch(() => undefined);
+    if (!m) continue;
+    const bk = `backup:v1:${modelKey(id)}`;
+    if (await get(bk).catch(() => undefined)) {
+      res.existing.push(id);
+      continue;
+    }
+    await put(bk, m).catch(() => undefined);
+    const rp = await get(replayKey(id)).catch(() => undefined);
+    if (rp) await put(`backup:v1:${replayKey(id)}`, rp).catch(() => undefined);
+    res.backedUp.push(id);
+  }
+  return res;
+}
+
+/** Put a backed-up legacy model back (explicit user action). */
+export async function restoreLegacyBackup(taskId: string): Promise<boolean> {
+  const m = await get<ModelBlob>(`backup:v1:${modelKey(taskId)}`).catch(() => undefined);
+  if (!m) return false;
+  await put(modelKey(taskId), m);
+  const rp = await get(`backup:v1:${replayKey(taskId)}`).catch(() => undefined);
+  if (rp) await put(replayKey(taskId), rp);
+  return true;
 }

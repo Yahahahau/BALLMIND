@@ -77,3 +77,31 @@ export function buildProprioception(
   out[6] = s.grounded ? 1 : 0;
   out[7] = clamp(Math.hypot(s.vx, s.vz) / C.vMax);
 }
+
+/**
+ * First-person vision observation (9 values, all the ball's OWN physical state – no coordinates):
+ *  0-2 velocity in the camera frame (forward, up, right)  3-5 angular velocity  6 grounded  7 speed
+ *  8 camera pitch (own gaze state, -1…1 = -80°…+80°)
+ */
+export const FP_PROPRIO_SIZE = 9;
+
+export function buildFpProprioception(
+  out: Float32Array,
+  s: ReachState,
+  angVel: { x: number; y: number; z: number },
+  yawDeg: number,
+  pitchDeg: number,
+): void {
+  const y = (yawDeg * Math.PI) / 180;
+  const sn = Math.sin(y);
+  const cs = Math.cos(y);
+  out[0] = clamp((s.vx * sn - s.vz * cs) / C.vMax);
+  out[1] = clamp(s.vy / 8);
+  out[2] = clamp((s.vx * cs + s.vz * sn) / C.vMax);
+  out[3] = clamp(angVel.x / 20);
+  out[4] = clamp(angVel.y / 20);
+  out[5] = clamp(angVel.z / 20);
+  out[6] = s.grounded ? 1 : 0;
+  out[7] = clamp(Math.hypot(s.vx, s.vz) / C.vMax);
+  out[8] = clamp(pitchDeg / 80);
+}

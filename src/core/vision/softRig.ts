@@ -2,7 +2,8 @@ import type { EnvSnapshot } from '../task/types';
 import { REACH_CONFIG as C } from '../tasks/reachSquare/config';
 import { visionCameraPose } from './camera';
 import type { VisionSettings } from './config';
-import { VISION_COLORS, type VisionRig } from './rig';
+import { FP_ABYSS_Y, FP_VIEW_DIST, VISION_COLORS, type VisionRig } from './rig';
+import type { VisionCameraPose } from './camera';
 
 /**
  * CPU reference camera for the Reach scene: casts one ray per pixel through the SAME camera model
@@ -22,13 +23,14 @@ export class SoftReachRig implements VisionRig {
     this.settings = s;
   }
 
-  render(snap: EnvSnapshot, out: Uint8Array): void {
+  render(snap: EnvSnapshot, out: Uint8Array, pose?: VisionCameraPose): void {
     const s = this.settings;
     const n = s.size;
     const plane = n * n;
     const b = snap.bodies.ball.p;
     const t = snap.bodies.target.p;
-    const cam = visionCameraPose(s, b[0], b[1], b[2]);
+    const fp = !!pose; // first-person: the AI's own body is not part of its scene
+    const cam = pose ?? visionCameraPose(s, b[0], b[1], b[2]);
     const [ex, ey, ez] = cam.eye;
     const R = C.ballRadius;
     const top = C.tileHeight;
@@ -44,7 +46,7 @@ export class SoftReachRig implements VisionRig {
         dx /= dl;
         dy /= dl;
         dz /= dl;
-        let c = col.void;
+        let c: [number, number, number] = fp ? col.sky : col.void;
         let best = Infinity;
         // floor (y = 0)
         if (dy < -1e-6) {
@@ -68,7 +70,9 @@ export class SoftReachRig implements VisionRig {
             }
           }
         }
+        if (fp && c === col.sky && dy < -1e-6 && (FP_ABYSS_Y - ey) / dy <= FP_VIEW_DIST) c = col.void;
         // ball sphere
+        if (!fp) {
         const ox = ex - b[0];
         const oy = ey - b[1];
         const oz = ez - b[2];
@@ -81,6 +85,7 @@ export class SoftReachRig implements VisionRig {
             best = t3;
             c = col.ball;
           }
+        }
         }
         const p = j * n + i;
         out[p] = c[0];

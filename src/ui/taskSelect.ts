@@ -34,6 +34,7 @@ const PREVIEWS: Record<string, string> = {
 };
 
 PREVIEWS['reach-vision'] = PREVIEWS['reach-square'];
+PREVIEWS['reach-fp'] = PREVIEWS['reach-square'];
 
 /** Modal "SELECT TRAINING TASK". Rendered from the task catalog, so new tasks appear automatically. */
 export function showTaskSelect(tasks: TaskInfo[], onPick: (t: TaskInfo) => void): void {

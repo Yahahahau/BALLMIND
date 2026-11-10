@@ -1,10 +1,10 @@
-import { createLocomotionActions } from '../../action/actionSet';
+import { createLocomotionActions, type ActionDef } from '../../action/actionSet';
 import { BallAgent, DEFAULT_BALL } from '../../agent/ballAgent';
 import { Rng } from '../../math/rng';
 import { initPhysics, PhysicsWorld, RAPIER } from '../../physics/physicsWorld';
 import type { BodyPose, Environment, EnvSnapshot, StepResult } from '../../task/types';
 import { REACH_CONFIG as C } from './config';
-import { buildObservation, buildProprioception, OBSERVATION_SIZE, PROPRIO_SIZE, ReachState } from './observation';
+import { buildFpProprioception, buildObservation, buildProprioception, FP_PROPRIO_SIZE, OBSERVATION_SIZE, PROPRIO_SIZE, ReachState } from './observation';
 import { computeReward } from './reward';
 
 /** REACH THE SQUARE: touch the target tile on the floor without falling off. */
@@ -27,8 +27,8 @@ export class ReachSquareEnvironment implements Environment {
   private lastActionJumped = false;
 
   /** `vision`: observation = physics sensors only (no coordinates); the target is found through the camera. */
-  constructor(seed: number, private readonly vision = false) {
-    this.observationSize = vision ? PROPRIO_SIZE : OBSERVATION_SIZE;
+  constructor(seed: number, private readonly vision: false | 'top' | 'fp' = false) {
+    this.observationSize = vision === 'fp' ? FP_PROPRIO_SIZE : vision ? PROPRIO_SIZE : OBSERVATION_SIZE;
     this.obs = new Float32Array(this.observationSize);
     this.rng = new Rng(seed * 104729 + 7);
     this.physics = new PhysicsWorld(-9.81);
@@ -61,15 +61,36 @@ export class ReachSquareEnvironment implements Environment {
     return this.obs;
   }
 
+  private yawDeg = 0;
+  private pitchDeg = 0;
+  private rot: ActionDef = { id: 'rot', label: 'rot', move: [0, 0], jump: false, brake: false };
+
+  /** First-person: movement actions are relative to where the AI is looking. */
+  setHeading(yawDeg: number, pitchDeg = this.pitchDeg): void {
+    this.yawDeg = yawDeg;
+    this.pitchDeg = pitchDeg;
+  }
+
   physicsStep(action: number, firstSubstep: boolean): void {
-    const def = this.actionSet.get(action);
+    let def = this.actionSet.get(action);
+    if (this.vision === 'fp') {
+      const y = (this.yawDeg * Math.PI) / 180;
+      const fwd = -def.move[1];
+      const r = this.rot;
+      r.move[0] = def.move[0] * Math.cos(y) + fwd * Math.sin(y);
+      r.move[1] = def.move[0] * Math.sin(y) - fwd * Math.cos(y);
+      r.jump = def.jump;
+      r.brake = def.brake;
+      def = r;
+    }
     this.ball.applyAction(def, firstSubstep);
     if (firstSubstep) this.lastActionJumped = def.jump;
     this.physics.step();
   }
 
   private observe(): void {
-    if (this.vision) buildProprioception(this.obs, this.state, this.ball.body.angvel());
+    if (this.vision === 'fp') buildFpProprioception(this.obs, this.state, this.ball.body.angvel(), this.yawDeg, this.pitchDeg);
+    else if (this.vision) buildProprioception(this.obs, this.state, this.ball.body.angvel());
     else buildObservation(this.obs, this.state);
   }
 
@@ -134,5 +155,10 @@ export async function createReachSquareEnvironment(seed: number): Promise<Enviro
 
 export async function createReachVisionEnvironment(seed: number): Promise<Environment> {
   await initPhysics();
-  return new ReachSquareEnvironment(seed, true);
+  return new ReachSquareEnvironment(seed, 'top');
+}
+
+export async function createReachFpEnvironment(seed: number): Promise<Environment> {
+  await initPhysics();
+  return new ReachSquareEnvironment(seed, 'fp');
 }

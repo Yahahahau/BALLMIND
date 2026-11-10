@@ -109,7 +109,7 @@ export interface TrainingStats {
   /** Task-specific live values (Obby: stage, checkpoint, progress, curriculum…) and per-stage stats. */
   extra?: Record<string, unknown> & { stages?: StageStats[] };
   /** Present for vision tasks. */
-  vision?: { size: number; stack: number; params: number; renderMs: number; kind: string };
+  vision?: { size: number; stack: number; params: number; renderMs: number; kind: string; mode: string; yaw: number; pitch: number; fov: number; gazeAction: string; frames: number; decisionsPerSecond: number };
 }
 
 /** One recorded episode for the Training Replay viewer. */

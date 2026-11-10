@@ -1,7 +1,7 @@
 import { createLocomotionActions } from '../../action/actionSet';
 import type { TaskInfo } from '../../task/types';
 import { REACH_CONFIG as C } from './config';
-import { OBSERVATION_SIZE, PROPRIO_SIZE } from './observation';
+import { FP_PROPRIO_SIZE, OBSERVATION_SIZE, PROPRIO_SIZE } from './observation';
 
 /** Light-weight task description (no physics imports) – safe to bundle into the UI thread. */
 export const reachSquareInfo: TaskInfo = {
@@ -30,4 +30,15 @@ export const reachVisionInfo: TaskInfo = {
   actionLabels: createLocomotionActions().actions.map((a) => a.label),
   geometry: reachSquareInfo.geometry,
   vision: { scene: 'reach', proprioSize: PROPRIO_SIZE },
+};
+
+export const reachFpInfo: TaskInfo = {
+  id: 'reach-fp',
+  title: 'REACH THE SQUARE · FIRST-PERSON (V2)',
+  description:
+    'Vision Agent V2: the ball sees through a real first-person eye camera (≈90° FOV) and decides by itself where to look and how to move. CNN + GRU memory, trained from real Rapier rewards. No coordinates are given.',
+  observationSize: FP_PROPRIO_SIZE,
+  actionLabels: createLocomotionActions().actions.map((a) => a.label),
+  geometry: reachSquareInfo.geometry,
+  vision: { scene: 'reach', proprioSize: FP_PROPRIO_SIZE, defaults: { mode: 'fp', size: 48, stack: 1, fov: 90, yawRate: 120, pitchRate: 80 } },
 };

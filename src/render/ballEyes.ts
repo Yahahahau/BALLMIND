@@ -78,8 +78,13 @@ export class BallEyes {
    *                  (eyes then look straight ahead).
    * @param headingHint horizontal facing used before the ball has moved (camera heading for vision tasks).
    */
-  update(dt: number, pos: THREE.Vector3, gazeWorld: THREE.Vector3 | null, headingHint?: number): void {
+  update(dt: number, pos: THREE.Vector3, gazeWorld: THREE.Vector3 | null, headingHint?: number, fp?: { yaw: number; pitch: number } | null): void {
     this.group.position.copy(pos);
+    if (fp) {
+      this.updateFp(dt, fp);
+      return;
+    }
+    this.face.rotation.x = 0;
     // heading follows the (visual) travel direction; ignore teleports (respawn / replay seek)
     if (this.hasLast && dt > 0) {
       const dx = pos.x - this.last.x;
@@ -125,6 +130,46 @@ export class BallEyes {
     const ux = h > 1e-4 ? nx / h : 0;
     const uy = h > 1e-4 ? ny / h : 0;
     this.place(Math.sin(a) * ux, Math.sin(a) * uy, Math.cos(a), 1);
+  }
+
+  private faceYaw = 0; // degrees (camera convention) the face rig is currently turned to
+  private facePitch = 0;
+  private fpInit = false;
+
+  /**
+   * First-person gaze: the AI camera's yaw/pitch is the source of truth. The face rig turns towards it
+   * (smoothly), the eyeballs ride on the face, and the pupils show the remaining difference between where
+   * the camera points and where the face currently points – so they lead every gaze change and settle to
+   * the centre once the face has caught up. Nothing here is random or independent of the camera.
+   */
+  private updateFp(dt: number, g: { yaw: number; pitch: number }): void {
+    if (!this.fpInit) {
+      this.faceYaw = g.yaw;
+      this.facePitch = g.pitch;
+      this.fpInit = true;
+    }
+    const wrap = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180;
+    const dyaw = wrap(g.yaw - this.faceYaw);
+    const dpit = g.pitch - this.facePitch;
+    const k = 1 - Math.exp(-9 * Math.max(0, dt));
+    this.faceYaw = wrap(this.faceYaw + dyaw * k);
+    this.facePitch += dpit * k;
+    // face rig: front (+Z local) points along the camera direction (yaw 0 = world -Z)
+    this.face.rotation.order = 'YXZ';
+    this.face.rotation.y = Math.PI - (this.faceYaw * Math.PI) / 180;
+    this.face.rotation.x = -(this.facePitch * Math.PI) / 180;
+    // residual gaze (what the camera does beyond the face) → pupil direction in face space
+    const ry = (wrap(g.yaw - this.faceYaw) * Math.PI) / 180;
+    const rp = ((g.pitch - this.facePitch) * Math.PI) / 180;
+    // camera yaw to the right ⇒ looking toward the AI's right = local −X (front is +Z)
+    const lx = -Math.sin(ry) * Math.cos(rp);
+    const ly = Math.sin(rp);
+    const lz = Math.cos(ry) * Math.cos(rp);
+    this.gl.set(lx, ly, lz);
+    const theta = Math.acos(Math.min(1, Math.max(-1, lz)));
+    const a = this.maxPupil * Math.min(1, theta / ((20 * Math.PI) / 180));
+    const h = Math.hypot(lx, ly);
+    this.place(h > 1e-5 ? (Math.sin(a) * lx) / h : 0, h > 1e-5 ? (Math.sin(a) * ly) / h : 0, Math.cos(a), 1);
   }
 
   /** Pupil offsets (face-local, unit eyeball) for tests/inspection. */

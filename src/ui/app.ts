@@ -2,7 +2,7 @@ import { SimClient } from '../app/simClient';
 import { TASK_CATALOG } from '../core/tasks/catalog';
 import type { TaskInfo } from '../core/task/types';
 import { modelFromJson, modelToJson, ModelBlob, TrainingStats } from '../core/training/model';
-import { deleteModel, deleteReplays, loadModel, loadReplays, loadSettings, saveModel, saveReplays, saveSettings, Settings } from '../persist/db';
+import { backupLegacyModels, deleteModel, deleteReplays, loadModel, loadReplays, loadSettings, saveModel, saveReplays, saveSettings, Settings } from '../persist/db';
 import { ReplayStore } from '../persist/replayStore';
 import { ObbyPanel } from './obbyPanel';
 import { SkyPanel } from './skyPanel';
@@ -10,6 +10,7 @@ import { MusicPlayer } from '../audio/musicPlayer';
 import { MusicPanel } from './musicPanel';
 import { GtaoPanel } from './gtaoPanel';
 import { VisionPanel } from './visionPanel';
+import type { VisionSettings } from '../core/vision/config';
 import { DEFAULT_GTAO } from '../render/gtao';
 import { ReplayViewer } from './replayViewer';
 import { BALL_PALETTES } from '../render/ballStyle';
@@ -92,7 +93,8 @@ export class App {
     this.visionPanel = new VisionPanel(
       (m) => this.sim?.send(m),
       (v) => {
-        this.settings.vision = v;
+        if (v.mode === 'fp') this.settings.visionFp = v;
+        else this.settings.vision = v;
         void saveSettings(this.settings);
       },
       () => {
@@ -100,6 +102,10 @@ export class App {
       },
     );
     this.el.side.appendChild(this.visionPanel.root);
+    void backupLegacyModels().then((r) => {
+      const n = r.backedUp.length + r.existing.length;
+      this.visionPanel?.setBackupNote(n ? `Legacy AI data is backed up (${n} model${n > 1 ? 's' : ''}); the first-person agent uses its own separate model slot.` : 'First-person agent uses its own separate model slot; existing models are untouched.');
+    });
     const music = new MusicPlayer();
     music.configure({ ...this.settings.music });
     (window as unknown as { __music?: MusicPlayer }).__music = music;
@@ -274,7 +280,8 @@ export class App {
     if (this.isObby) this.viewport.buildObby();
     else this.viewport.buildTask(info.geometry);
     this.obbyPanel?.clear();
-    this.visionPanel?.setTask(!!info.vision, this.settings.vision);
+    const vs = info.vision?.defaults?.mode === 'fp' ? this.settings.visionFp : this.settings.vision;
+    this.visionPanel?.setTask(!!info.vision, vs ? { ...info.vision?.defaults, ...vs } as VisionSettings : (info.vision?.defaults as VisionSettings | undefined));
     this.viewport.setGaze(null);
     this.replays.clear();
     if (this.isObby) this.replays.set(await loadReplays(info.id));
@@ -289,7 +296,7 @@ export class App {
     const sim = new SimClient();
     this.sim = sim;
     sim.onMessage = (m) => this.onWorker(m);
-    sim.send({ type: 'init', taskId: info.id, seed: (Date.now() & 0xffff) + 1, model: saved, vision: info.vision ? this.settings.vision : undefined });
+    sim.send({ type: 'init', taskId: info.id, seed: (Date.now() & 0xffff) + 1, model: saved, vision: info.vision ? { ...info.vision.defaults, ...vs } : undefined });
     sim.send({ type: 'speed', value: this.settings.speed });
     this.saveTimer = window.setInterval(() => {
       if (this.runState === 'running' && !this.demo) this.requestSave('auto');
@@ -310,12 +317,13 @@ export class App {
         this.graphs.setHistory(m.history);
         this.obbyPanel?.setHistory(m.history, m.loss);
         this.lastStats = m.stats;
+        if (m.stats.vision) this.visionPanel?.onStats(m.stats.vision, this.viewport.interp.stats, m.stats.vision.frames > 0);
         this.lastSuccesses = m.stats.successes;
         this.renderStats(true);
         if (m.restored) toast(`Restored AI: ${m.stats.episodesDone} episodes · ${m.stats.trainSteps} training steps`);
         break;
       case 'visionInfo':
-        this.viewport.setGaze(m.settings);
+        this.viewport.setGaze(m.settings.mode === 'fp' ? null : m.settings);
         this.visionPanel?.onInfo(m);
         break;
       case 'visionFrame':

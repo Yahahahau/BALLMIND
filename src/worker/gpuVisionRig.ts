@@ -3,7 +3,8 @@ import type { EnvSnapshot } from '../core/task/types';
 import { REACH_CONFIG as C } from '../core/tasks/reachSquare/config';
 import { visionCameraPose } from '../core/vision/camera';
 import type { VisionSettings } from '../core/vision/config';
-import { VISION_COLORS, type VisionRig } from '../core/vision/rig';
+import { FP_ABYSS_Y, FP_VIEW_DIST, VISION_COLORS, type VisionRig } from '../core/vision/rig';
+import type { VisionCameraPose } from '../core/vision/camera';
 import { SoftReachRig } from '../core/vision/softRig';
 
 const rgb = (c: [number, number, number]) => new THREE.Color().setRGB(c[0] / 255, c[1] / 255, c[2] / 255, THREE.LinearSRGBColorSpace);
@@ -22,6 +23,8 @@ export class GpuReachRig implements VisionRig {
   private rt: THREE.WebGLRenderTarget | null = null;
   private ball: THREE.Mesh;
   private tile: THREE.Mesh;
+  private abyss: THREE.Mesh;
+  private fpMode: boolean | null = null;
   private px = new Uint8Array(0);
   private disposables: { dispose(): void }[] = [];
 
@@ -48,7 +51,12 @@ export class GpuReachRig implements VisionRig {
     floor.position.y = -C.floorThickness / 2;
     this.tile = new THREE.Mesh(tileG, mat(VISION_COLORS.target));
     this.ball = new THREE.Mesh(ballG, mat(VISION_COLORS.ball));
-    this.scene.add(floor, this.tile, this.ball);
+    const abyssG = new THREE.PlaneGeometry(4000, 4000);
+    abyssG.rotateX(-Math.PI / 2);
+    this.disposables.push(abyssG);
+    this.abyss = new THREE.Mesh(abyssG, mat(VISION_COLORS.void));
+    this.abyss.position.y = FP_ABYSS_Y;
+    this.scene.add(floor, this.tile, this.ball, this.abyss);
     this.camera.matrixAutoUpdate = false;
     this.camera.matrixWorldAutoUpdate = false;
     this.configure(settings);
@@ -66,17 +74,30 @@ export class GpuReachRig implements VisionRig {
       magFilter: THREE.NearestFilter,
     });
     this.px = new Uint8Array(s.size * s.size * 4);
-    this.camera.fov = s.fov;
-    this.camera.updateProjectionMatrix();
+    this.fpMode = null;
   }
 
-  render(snap: EnvSnapshot, out: Uint8Array): void {
+  render(snap: EnvSnapshot, out: Uint8Array, pose?: VisionCameraPose): void {
     const n = this.settings.size;
     const b = snap.bodies.ball.p;
     const t = snap.bodies.target.p;
     this.ball.position.set(b[0], b[1], b[2]);
     this.tile.position.set(t[0], C.tileHeight / 2, t[2]);
-    const cam = visionCameraPose(this.settings, b[0], b[1], b[2]);
+    const fp = !!pose;
+    if (fp !== this.fpMode) {
+      this.fpMode = fp;
+      this.ball.visible = !fp; // first-person: the AI's own body is not in its scene
+      this.abyss.visible = fp;
+      this.renderer.setClearColor(rgb(fp ? VISION_COLORS.sky : VISION_COLORS.void), 1);
+      this.camera.far = fp ? FP_VIEW_DIST : 120;
+      this.camera.updateProjectionMatrix();
+    }
+    const cam = pose ?? visionCameraPose(this.settings, b[0], b[1], b[2]);
+    const fov = (2 * Math.atan(cam.tanHalf) * 180) / Math.PI;
+    if (Math.abs(fov - this.camera.fov) > 1e-6) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
     this.camera.matrixWorld.makeBasis(new THREE.Vector3(...cam.right), new THREE.Vector3(...cam.up), new THREE.Vector3(-cam.fwd[0], -cam.fwd[1], -cam.fwd[2]));
     this.camera.matrixWorld.setPosition(cam.eye[0], cam.eye[1], cam.eye[2]);
     this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();

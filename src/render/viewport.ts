@@ -3,6 +3,7 @@ import { SkyboxManager } from './skybox';
 import { GtaoPipeline } from './gtao';
 import type { EnvSnapshot } from '../core/task/types';
 import { BallEyes } from './ballEyes';
+import { SnapshotInterpolator } from './snapshotInterpolator';
 import { visionCameraPose } from '../core/vision/camera';
 import type { VisionSettings } from '../core/vision/config';
 import { BALL_PALETTES, createCheckerTexture, createGridTexture } from './ballStyle';
@@ -37,6 +38,9 @@ export class Viewport {
   private overviewOn = false;
   private ball!: THREE.Mesh;
   private eyes: BallEyes | null = null;
+  /** Live (non-replay) rendering interpolates between authoritative physics snapshots. */
+  readonly interp = new SnapshotInterpolator();
+  private lastDynKey: Float32Array | undefined;
   private gazeVec: THREE.Vector3 | null = null;
   private gazeYaw = 0;
   private ballMat!: THREE.MeshPhysicalMaterial;
@@ -403,12 +407,15 @@ export class Viewport {
       this.setObbyStage(s.info.stage ?? 0);
       this.snapPos.set(b.p[0], b.p[1], b.p[2]);
       this.snapQuat.set(b.q[0], b.q[1], b.q[2], b.q[3]);
-      if (s.dyn) this.obby.applyDyn(s.dyn);
       if (s.epoch !== this.epoch) {
         this.epoch = s.epoch;
+        this.interp.clear();
         this.ball.position.copy(this.snapPos);
         this.ball.quaternion.copy(this.snapQuat);
+        if (s.dyn) this.obby.applyDyn(s.dyn);
       }
+      if (s.simTime !== undefined) this.interp.push({ t: s.simTime, p: [b.p[0], b.p[1], b.p[2]], q: [b.q[0], b.q[1], b.q[2], b.q[3]], epoch: s.epoch, dyn: s.dyn }, performance.now());
+      else if (s.dyn) this.obby.applyDyn(s.dyn);
       return;
     }
     const b = s.bodies.ball;
@@ -418,10 +425,16 @@ export class Viewport {
     this.snapTarget.set(t.p[0], t.p[1], t.p[2]);
     if (s.epoch !== this.epoch && this.ball) {
       this.epoch = s.epoch;
+      this.interp.clear();
       this.ball.position.copy(this.snapPos);
       this.ball.quaternion.copy(this.snapQuat);
       this.targetGroup.position.copy(this.snapTarget);
     }
+    if (s.simTime !== undefined)
+      this.interp.push(
+        { t: s.simTime, p: [b.p[0], b.p[1], b.p[2]], q: [b.q[0], b.q[1], b.q[2], b.q[3]], target: [t.p[0], t.p[1], t.p[2]], yaw: s.gaze?.yaw, pitch: s.gaze?.pitch, epoch: s.epoch },
+        performance.now(),
+      );
   }
 
   flashTarget(): void {
@@ -489,11 +502,25 @@ export class Viewport {
 
   private frame(dt: number, now: number, dtMs: number): void {
     if (this.ball) {
-      const k = 1 - Math.exp(-38 * dt);
-      if (!Number.isFinite(this.ball.position.x + this.ball.position.y + this.ball.position.z)) this.ball.position.copy(this.snapPos);
-      this.ball.position.lerp(this.snapPos, k);
-      this.ball.quaternion.slerp(this.snapQuat, k);
-      this.eyes?.update(dt, this.ball.position, this.gazeVec, this.gazeYaw);
+      const pose = !this.replayMode && this.interp.ready ? this.interp.sample(now) : null;
+      let fpGaze: { yaw: number; pitch: number } | null = null;
+      if (pose) {
+        // the ball, the eyes/face and (for Reach) the target all come from the SAME interpolated physics state
+        this.ball.position.set(pose.p[0], pose.p[1], pose.p[2]);
+        this.ball.quaternion.set(pose.q[0], pose.q[1], pose.q[2], pose.q[3]);
+        if (pose.yaw !== undefined) fpGaze = { yaw: pose.yaw, pitch: pose.pitch ?? 0 };
+        if (this.obbyBall && this.obby && pose.dyn && pose.dyn !== this.lastDynKey) {
+          this.lastDynKey = pose.dyn;
+          this.obby.applyDyn(pose.dyn);
+        }
+        if (!this.obbyBall && pose.target) this.snapTarget.set(pose.target[0], pose.target[1], pose.target[2]);
+      } else {
+        const k = 1 - Math.exp(-38 * dt);
+        if (!Number.isFinite(this.ball.position.x + this.ball.position.y + this.ball.position.z)) this.ball.position.copy(this.snapPos);
+        this.ball.position.lerp(this.snapPos, k);
+        this.ball.quaternion.slerp(this.snapQuat, k);
+      }
+      this.eyes?.update(dt, this.ball.position, this.gazeVec, this.gazeYaw, fpGaze);
       if (this.obbyBall) {
         // shadow light follows the ball so a small, sharp shadow map covers the action
         const bp = this.ball.position;
@@ -501,7 +528,8 @@ export class Viewport {
         this.light.position.set(bp.x + this.lightDir.x * 25, bp.y + this.lightDir.y * 25, bp.z + this.lightDir.z * 25);
         this.controls.update(dt, this.ball.position);
       } else {
-        this.targetGroup.position.lerp(this.snapTarget, 1 - Math.exp(-30 * dt));
+        if (pose?.target) this.targetGroup.position.copy(this.snapTarget);
+        else this.targetGroup.position.lerp(this.snapTarget, 1 - Math.exp(-30 * dt));
         this.controls.update(dt, this.ball.position);
       }
       if (!this.obbyBall && this.flash > 0) {

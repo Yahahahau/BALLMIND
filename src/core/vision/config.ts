@@ -14,17 +14,24 @@ export interface VisionSettings {
   yaw: number;
   /** Distance from the ball to the camera along its view direction, metres. */
   distance: number;
+  /** 'top' = v1 bird's-eye camera; 'fp' = first-person eye camera (v2) with AI-controlled gaze. */
+  mode: 'top' | 'fp';
+  /** fp: gaze turn speed, degrees per second while a look action is held. */
+  yawRate: number;
+  pitchRate: number;
 }
 
-export const DEFAULT_VISION: VisionSettings = { size: 40, stack: 2, fov: 60, pitch: 90, yaw: 0, distance: 10 };
+export const DEFAULT_VISION: VisionSettings = { size: 40, stack: 2, fov: 60, pitch: 90, yaw: 0, distance: 10, mode: 'top', yawRate: 120, pitchRate: 80 };
 
 export const VISION_LIMITS = {
-  size: [16, 96],
+  size: [16, 128],
   stack: [1, 4],
   fov: [30, 110],
   pitch: [20, 90],
   yaw: [-180, 180],
   distance: [4, 30],
+  yawRate: [30, 360],
+  pitchRate: [20, 240],
 } as const;
 
 export function sanitizeVision(v: Partial<VisionSettings> | undefined, base: VisionSettings = DEFAULT_VISION): VisionSettings {
@@ -41,6 +48,16 @@ export function sanitizeVision(v: Partial<VisionSettings> | undefined, base: Vis
 
 /** The CNN visual encoder layout for a given image size. */
 export function encoderConvs(size: number): { convs: ConvSpec[]; feat: number } {
+  if (size >= 96) {
+    return {
+      convs: [
+        { k: 6, s: 3, out: 8 },
+        { k: 4, s: 2, out: 16 },
+        { k: 3, s: 2, out: 16 },
+      ],
+      feat: 96,
+    };
+  }
   return {
     convs: [
       { k: 4, s: 2, out: 8 },
@@ -64,3 +81,6 @@ export interface VisionTaskSpec {
   proprioSize: number;
   defaults?: Partial<VisionSettings>;
 }
+
+/** First-person (v2) defaults: natural ~90° FOV, small image (see README for the compute trade-off). */
+export const FP_VISION_DEFAULTS: Partial<VisionSettings> = { mode: 'fp', size: 48, stack: 1, fov: 90, yawRate: 120, pitchRate: 80 };

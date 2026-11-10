@@ -28,6 +28,10 @@ export interface EnvSnapshot {
   dyn?: Float32Array;
   /** Free-form scalar info (grounded flag, distance …). */
   info: Record<string, number>;
+  /** Authoritative physics time (s) of this snapshot – lets the renderer interpolate between snapshots. */
+  simTime?: number;
+  /** First-person AI vision tasks: the AI's current camera orientation in degrees. */
+  gaze?: { yaw: number; pitch: number };
 }
 
 /** Static description handed to the UI/renderer when a task is loaded. */
@@ -84,6 +88,8 @@ export interface Environment {
   physicsStep(action: number, firstSubstep: boolean): void;
   /** Called after `substepsPerDecision` physics steps: compute observation, reward and termination. */
   evaluate(decisionIndex: number): StepResult;
+  /** First-person vision tasks: the AI's camera yaw (deg). Movement actions become camera-relative. */
+  setHeading?(yawDeg: number, pitchDeg?: number): void;
   snapshot(): EnvSnapshot;
   dispose(): void;
 

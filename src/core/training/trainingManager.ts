@@ -1,6 +1,9 @@
 import { DEFAULT_DQN_CONFIG, DQNAgent, DQNConfig } from '../rl/dqn';
 import type { Learner } from '../rl/learner';
 import { VisionDQNAgent } from '../vision/visionAgent';
+import { RecurrentVisionAgent } from '../vision/recurrentAgent';
+import { GazeController, GAZE_ACTIONS } from '../vision/gaze';
+import { firstPersonPose } from '../vision/camera';
 import type { VisionRig } from '../vision/rig';
 import { sanitizeVision, type VisionSettings } from '../vision/config';
 import type { Environment, EnvSnapshot, TaskDefinition, TaskNotice } from '../task/types';
@@ -29,7 +32,11 @@ export class TrainingManager {
   readonly env: Environment;
   readonly agent: Learner;
   /** Present for vision tasks: the AI camera + the multimodal agent. */
-  readonly vision: { rig: VisionRig; agent: VisionDQNAgent; frame: Uint8Array; renderMs: number } | null = null;
+  readonly vision: { rig: VisionRig; agent: VisionDQNAgent | RecurrentVisionAgent; frame: Uint8Array; renderMs: number } | null = null;
+  /** First-person (v2) tasks: the AI-controlled camera orientation. */
+  readonly gaze: GazeController | null = null;
+  private simTime = 0;
+  private readonly ballRadius: number;
   state: RunState = 'idle';
   speed = 4;
   demo = false;
@@ -67,9 +74,11 @@ export class TrainingManager {
     this.task = task;
     this.env = env;
     this.agent = agent;
-    if (rig && agent instanceof VisionDQNAgent) {
+    this.ballRadius = task.info.geometry?.ballRadius ?? 0.5;
+    if (rig && (agent instanceof VisionDQNAgent || agent instanceof RecurrentVisionAgent)) {
       const n = 3 * agent.vision.size * agent.vision.size;
       this.vision = { rig, agent, frame: new Uint8Array(n), renderMs: 0 };
+      if (agent instanceof RecurrentVisionAgent) this.gaze = new GazeController(agent.vision.yawRate, agent.vision.pitchRate);
     }
     this.seed = seed;
     this.obs = new Float32Array(env.observationSize);
@@ -93,7 +102,10 @@ export class TrainingManager {
       if (!vision) throw new Error('This task needs the AI vision camera, but no vision renderer is available');
       const settings = sanitizeVision(vision.settings, sanitizeVision(task.vision.defaults));
       vision.rig.configure(settings);
-      const agent = new VisionDQNAgent(env.observationSize, env.actionSet.size, settings, cfg, seed);
+      const agent =
+        settings.mode === 'fp'
+          ? new RecurrentVisionAgent(env.observationSize, env.actionSet.size, GAZE_ACTIONS.length, settings, cfg, seed)
+          : new VisionDQNAgent(env.observationSize, env.actionSet.size, settings, cfg, seed);
       return new TrainingManager(task, env, agent, seed, vision.rig);
     }
     return new TrainingManager(task, env, new DQNAgent(env.observationSize, env.actionSet.size, cfg, seed), seed);
@@ -166,6 +178,10 @@ export class TrainingManager {
   // ---------------- main loop ----------------
 
   private beginEpisode(): void {
+    if (this.gaze) {
+      this.gaze.reset(0, 0);
+      this.env.setHeading?.(0, 0);
+    }
     this.obs.set(this.env.reset());
     if (this.vision) {
       this.look();
@@ -181,8 +197,23 @@ export class TrainingManager {
   private look(): void {
     const v = this.vision!;
     const t = now();
-    v.rig.render(this.env.snapshot(), v.frame);
+    const snap = this.env.snapshot();
+    if (this.gaze) {
+      const b = snap.bodies.ball.p;
+      v.rig.render(snap, v.frame, firstPersonPose(v.agent.vision.fov, this.gaze.yaw, this.gaze.pitch, b[0], b[1], b[2], this.ballRadius));
+    } else v.rig.render(snap, v.frame);
     v.renderMs = v.renderMs === 0 ? now() - t : v.renderMs * 0.95 + (now() - t) * 0.05;
+  }
+
+  /** Composite action = movement·G + gaze (G = 1 for tasks without gaze). */
+  private get gazeCount(): number {
+    return this.gaze ? GAZE_ACTIONS.length : 1;
+  }
+  private moveOf(a: number): number {
+    return Math.floor(a / this.gazeCount);
+  }
+  private gazeOf(a: number): number {
+    return a % this.gazeCount;
   }
 
   private chooseAction(): number {
@@ -235,7 +266,12 @@ export class TrainingManager {
 
   /** One physics step. Returns true when it completed an agent decision. */
   private substep(): boolean {
-    this.env.physicsStep(this.action, this.sub === 0);
+    if (this.gaze) {
+      this.gaze.step(this.gazeOf(this.action), FIXED_DT);
+      this.env.setHeading?.(this.gaze.yaw, this.gaze.pitch);
+    }
+    this.env.physicsStep(this.moveOf(this.action), this.sub === 0);
+    this.simTime += FIXED_DT;
     this.sub++;
     if (this.sub < this.env.substepsPerDecision) return false;
     this.sub = 0;
@@ -445,6 +481,13 @@ export class TrainingManager {
             params: this.vision.agent.paramCount,
             renderMs: this.vision.renderMs,
             kind: this.vision.rig.kind,
+            mode: this.vision.agent.vision.mode,
+            yaw: this.gaze?.yaw ?? 0,
+            pitch: this.gaze?.pitch ?? 0,
+            fov: this.vision.agent.vision.fov,
+            gazeAction: this.gaze ? GAZE_ACTIONS[this.gazeOf(this.action)].label : '',
+            frames: this.vision.agent.replay.size,
+            decisionsPerSecond: this.decisionsPerSecond,
           }
         : undefined,
       demo: this.demo,
@@ -454,8 +497,8 @@ export class TrainingManager {
     };
   }
 
-  snapshot(): EnvSnapshot & { action: number } {
-    return { ...this.env.snapshot(), action: this.action };
+  snapshot(): EnvSnapshot & { action: number; gazeAction: number } {
+    return { ...this.env.snapshot(), action: this.moveOf(this.action), simTime: this.simTime, gaze: this.gaze ? { yaw: this.gaze.yaw, pitch: this.gaze.pitch } : undefined, gazeAction: this.gazeOf(this.action) };
   }
 
   drainEpisodes(): EpisodeRecord[] {
