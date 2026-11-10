@@ -82,6 +82,28 @@ Physics sensors (ความเร็ว, ความเร็วเชิง�
 - ทำงานทั้งตอนเทรนและ Replay (ใช้ลูกบอลเดียวกัน) ; ไม่แสดงภาพจากกล้อง AI ให้ผู้เล่น ; เรขาคณิตเบา (3 mesh ต่อข้าง) ไม่มี post-processing เพิ่ม
 - ข้อจำกัด: กล้อง AI ยังเป็นแบบ world-aligned ที่ไม่ได้ถูก AI ควบคุมเอง จึงยังไม่มีการ "เหลือบมอง" โดย AI ; ตาแสดงทิศของกล้องตามค่าที่ตั้ง
 
+## AI Vision V2 · First-Person (REACH THE SQUARE · FIRST-PERSON)
+
+โมเดลใหม่แยกจากของเดิมทั้งหมด (task `reach-fp`, ช่องเก็บโมเดลแยก) – agent แบบ sensor เดิมและ Vision v1 (มุมมองบน) ยังเลือกใช้ได้และไม่ถูกแตะ ; เปิดเว็บครั้งแรกระบบจะ **สำรองโมเดลเดิมทุกตัวไปไว้ที่ `backup:v1:*` ใน IndexedDB** (ไม่เขียนทับ ไม่ลบ) พร้อมฟังก์ชัน `restoreLegacyBackup`
+
+```
+First-person eye camera → RGB (48×48) → CNN → visual features ┐
+Physics proprioception (9 ค่าของตัวบอลเอง) ─────────────────────┴→ GRU (หน่วยความจำ) → Q-movement + Q-gaze → Rapier + กล้องหมุน
+```
+
+- **กล้องมุมมองบุคคลที่หนึ่ง**: perspective จริง FOV 90°, เห็นฉากจริง (depth/occlusion ผ่านเรนเดอร์จริง), ตัวบอล/ลูกตาไม่ถูกเรนเดอร์เข้าภาพ AI, หมุนรอบตำแหน่งตัวเอง (ไม่ orbit) yaw 360°, pitch ±80°, ล็อก roll
+- **AI ควบคุมการมองเอง**: action ชุดแยก 9 แบบ (คงที่, ซ้าย, ขวา, ขึ้น, ลง, 4 เฉียง) หมุนต่อเนื่อง 120°/s ; ไม่มีการล็อกเป้า/พิกัดลับ ; การเดินเป็น "สัมพัทธ์กับทิศที่มอง" (เหมือนเกม FPS) แต่ตัดสินใจแยกจากการมอง (Q สองสาขา, branching Double DQN)
+- **CNN + GRU เทรนร่วมกัน** (recurrent Double DQN, ลำดับยาว 8, burn-in 3, BPTT เขียนเอง – ผ่าน gradient check `scripts/test-recurrent.ts`)
+- **Observation ไม่มีข้อมูลลับ**: ความเร็ว (ในกรอบกล้อง), ความเร็วเชิงมุม, แตะพื้น, speed, pitch ของตัวเอง ; เป้า/พิกัดใช้เฉพาะใน reward
+- **Face rig / ตา**: ใบหน้าหันตามทิศกล้อง (yaw/pitch), รูม่านตาแสดงส่วนต่างระหว่างทิศกล้องจริงกับทิศใบหน้า (นำหน้าเมื่อหันแล้วกลับกลางเมื่อใบหน้าตามทัน) ; แยกจากการกลิ้งของลูกบอล
+- **แก้ jitter**: worker ประทับเวลาฟิสิกส์ (fixed 1/60 s) ใน snapshot, viewport ใช้ snapshot interpolation (ลูกบอล, ตา, เป้า, แพลตฟอร์ม Obby ใช้สถานะเดียวกัน) แทนการ "ไล่" แบบ exponential ; ไม่แตะ state ของ Rapier ; ทดสอบจำลองการมาของ snapshot ที่ไม่สม่ำเสมอ: ความแกว่งต่อเฟรมลดจาก sd 0.0103 → 0.0041 ม. (`scripts/test-interp.ts`)
+- **Developer debug** (ปิดเป็นค่าเริ่มต้น): พรีวิวกล้อง, yaw/pitch, gaze action, อัตรา vision, สถานะ input, lag การซิงก์ ; ปิดได้โดยไม่กระทบ AI (ภาพจะไม่ถูกส่งจาก worker ถ้าปิด)
+- **ทดสอบ**: `scripts/test-vision2.ts` (21 ข้อ: มองรอบตัว 360°, จำกัด pitch, ไม่ orbit, AI เลือกมองเอง, ตา/pupil ตามกล้อง, Q ขึ้นกับภาพ ฯลฯ)
+
+### ผลเทรนจริง (กล้อง CPU ตัวอ้างอิง, ไม่มีสคริปต์ช่วย)
+เทรน ~80,000 decision (~8,200 updates, ~35 นาทีบน CPU): success rate ช่วงสุ่ม/ε สูง ~10–28% → เริ่มดีขึ้นหลัง ~40k steps → 46–68% ระหว่างเทรน (ε=0.08). ประเมินแบบ greedy ที่ checkpoint ~74k steps: **สำเร็จ 81% (83 ตอน)** ; ถ้า **บังตาให้กล้อง (ภาพเทาคงที่) สำเร็จ 0% (80 ตอน)** → นโยบายใช้ภาพจริงและใช้ภาพจริง ๆ (`scripts/vision-ablate.ts`)
+ข้อจำกัด: ยังไม่ได้ทดสอบบน iPad และยังไม่ได้เทรนบนกล้อง GPU (ภาพ GPU ต่างจาก CPU ≤1.5% ของพิกเซลที่ขอบวัตถุ) ; ภาพ 48×48 (ไม่ใช่ 128×128 ตามที่เสนอ – การอัปเดต CNN+GRU ที่ 128 px ช้าเกินไปใน JS ; ปรับได้ถึง 128 ในแผง) ; Obby ยังไม่มีโหมด first-person ; Reach ไม่มีสิ่งกีดขวางจึงยังไม่ได้ทดสอบ occlusion กับกำแพงจริง (depth buffer จัดการให้ในเรนเดอร์ GPU) ; ไม่มี adaptive rate อัตโนมัติ (ปรับขนาดภาพเอง) ; ใน Chromium แบบ SwiftShader ความเร็วช้ามาก (ไม่ใช่ตัวแทน GPU จริง)
+
 ## เทคโนโลยี
 - **Three.js** (WebGL2, PBR, real-time shadow map 2048², bias/normalBias ปรับตามขนาดฉาก) · **Rapier** physics (fixed timestep 1/60 s)
 - **Double DQN** เขียนเอง: MLP 17→64→64→14, Experience Replay (50k), ε-greedy, Target Network, Adam, Huber loss, gradient clipping
